@@ -3,13 +3,27 @@
   "version": "1.0.50",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "bun run --watch src/index.ts"
+    "dev": "bun run --watch src/index.ts",
+    "email": "email dev --dir src/emails"
   },
   "dependencies": {
-    "elysia": "latest"
+    "mongoose": "^8.0.0",
+    "@better-auth/expo": "^1.4.13",
+    "@elysiajs/cors": "^1.4.1",
+    "@elysiajs/openapi": "^1.4.13",
+    "@react-email/components": "^1.0.4",
+    "@types/react": "^19.2.8",
+    "better-auth": "^1.4.13",
+    "elysia": "latest",
+    "mongodb": "^7.0.0",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "resend": "^6.7.0"
   },
   "devDependencies": {
-    "bun-types": "latest"
+    "bun-types": "latest",
+    "react-email": "^5.2.5"
   },
-  "module": "src/index.js"
+  "module": "src/index.js",
+  "type": "module"
 }
