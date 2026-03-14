@@ -6,6 +6,8 @@ export {
   type IMerchant,
 } from "./Merchant";
 export { Order, type IOrder, type IOrderItem } from "./Order";
+export { Wallet, type IWallet } from "./Wallet";
+export { MerchantWallet, type IMerchantWallet } from "./MerchantWallet";
 export {
   Transaction,
   type ITransaction,

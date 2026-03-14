@@ -7,16 +7,12 @@ import { MongoClient } from "mongodb";
 import mongoose from "mongoose";
 import { Merchant } from "../db/models";
 
-const client = new MongoClient(
-  "mongodb+srv://samuel88783so_db_user:Y4Pej0iTR2CXhL5C@outsiders.a8ptz20.mongodb.net/?appName=outsiders"
-);
-// Y4Pej0iTR2CXhL5C
-// samuel88783so_db_user
-const db = client.db();
+const client = new MongoClient(process.env.MONGODB_URI as string);
+const db = client.db(process.env.DB_NAME ?? "outsiders");
 
 export const auth = betterAuth({
   appName: "outsider",
-  baseURL: "http://localhost:3000",
+  baseURL: process.env.BETTER_AUTH_URL,
   advanced: {
     cookiePrefix: "better-auth",
   },
@@ -32,10 +28,10 @@ export const auth = betterAuth({
     "outsiders://", // Development mode - Expo's exp:// scheme with local IP ranges
     "outsiders://*",
     "exp+outsiders://*",
-    "http://127.0.0.1:3000",
-    "https://127.0.0.1:3000/*",
-    "http://192.168.31.91:3000",
-    "http://192.168.31.91:3000/*",
+    "http://127.0.0.1:3011",
+    "https://127.0.0.1:3011/*",
+    "http://192.168.31.91:3011",
+    "http://192.168.31.91:3011/*",
     "exp://*/*", // Trust all Expo development URLs
     "exp://10.0.0.*:*/*", // Trust 10.0.0.x IP range
     "exp://192.168.*.*:*/*", // Trust 192.168.x.x IP range
@@ -43,7 +39,7 @@ export const auth = betterAuth({
     "exp://localhost:*/*", // Trust localhost
     "http://localhost:8081", // Trust localhost HTTP
     "http://localhost:8081/*", // Trust all localhost HTTP paths
-    "http://localhost:3000",
+    "http://localhost:3011",
   ],
   plugins: [
     expo(),
@@ -83,22 +79,6 @@ export const auth = betterAuth({
       };
     }),
   ],
-  hooks: {
-    after: async (context) => {
-      // console.log("after", context);
-      // Return the context to preserve the response
-      return context;
-    },
-    before: async (context) => {
-      // console.log("before", context);
-      // Return the context to preserve the request
-      console.log("before");
-      // fetch user from database
-      const user = await db.collection("users").find().toArray();
-      console.log({ users: user });
-      return context;
-    },
-  },
 });
 
 // let _schema: ReturnType<typeof auth.api.generateOpenAPISchema>;

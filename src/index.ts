@@ -1,102 +1,60 @@
-import { Elysia, Context, t } from "elysia";
-import { cors } from "@elysiajs/cors";
+import express from "express";
+import cors from "cors";
+import swaggerUi from "swagger-ui-express";
+import { toNodeHandler } from "better-auth/node";
 import { connectDb } from "./db";
 import { auth } from "./lib/auth";
-import { createMerchantHandler } from "./routes/merchants";
-import { openapi } from "@elysiajs/openapi";
-// import { OpenAPI } from "./lib/auth";
-const betterAuthView = (context: Context) => {
-  const BETTER_AUTH_ACCEPT_METHODS = ["POST", "GET"];
-  // validate request method
-  if (BETTER_AUTH_ACCEPT_METHODS.includes(context.request.method)) {
-    return auth.handler(context.request);
-  } else {
-    context.status(405);
-    return {
-      error: "Method not allowed",
-    };
-  }
-};
+import { swaggerDocument } from "./swagger";
+import healthRoutes from "./modules/health/health.routes";
+import merchantRoutes from "./modules/merchant/merchant.routes";
+import merchantWalletRoutes from "./modules/merchant-wallet/merchant-wallet.routes";
+import userRoutes from "./modules/user/user.routes";
+import uploadRoutes from "./modules/upload/upload.routes";
+import eventRoutes from "./modules/events/events.routes";
 
-// user middleware (compute user and session and pass to routes)
-const betterAuth = new Elysia({ name: "better-auth" })
-  .mount(auth.handler)
-  .macro({
-    auth: {
-      async resolve({ status, request: { headers } }) {
-        const session = await auth.api.getSession({
-          headers,
-        });
+const app = express();
 
-        if (!session) return status(401);
+app.use(
+  cors({
+    origin: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    credentials: true,
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Requested-With",
+      "Accept",
+      "Origin",
+    ],
+  }),
+);
 
-        console.log("session", session);
+// better-auth routes must be registered BEFORE express.json() so that
+// toNodeHandler can read the raw request body stream itself.
+app.all("/api/auth/*", toNodeHandler(auth));
 
-        return {
-          user: session.user,
-          session: session.session,
-        };
-      },
-    },
-  });
+app.use(express.json());
 
-const app = new Elysia()
-  // .use(
-  //   openapi({
-  //     documentation: {
-  //       components: await OpenAPI.components,
-  //       paths: await OpenAPI.getPaths(),
-  //     },
-  //   }),
-  // )
-  .use(
-    cors({
-      origin: true, // Allow all origins for development
-      methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-      credentials: true,
-      allowedHeaders: [
-        "Content-Type",
-        "Authorization",
-        "X-Requested-With",
-        "Accept",
-        "Origin",
-      ],
-    })
-  )
-  .use(betterAuth)
-  .all("/api/auth/*", betterAuthView)
-  .get(
-    "/api/user",
-    ({ user }) => {
-      const merchant =
-        (user as { merchant?: unknown } | null)?.merchant ?? null;
-      return { user: user ?? null, merchant };
-    },
-    {
-      auth: true,
-    }
-  )
-  .post("/api/merchants", createMerchantHandler, {
-    auth: true,
-    body: t.Object({
-      organizerName: t.String(),
-      email: t.String(),
-      phoneNumber: t.String(),
-      eventCategory: t.String(),
-      customCategory: t.Optional(t.String()),
-      organizerType: t.String(),
-      description: t.Optional(t.String()),
-      website: t.Optional(t.String()),
-    }),
-  })
-  .get("/health", () => ({ status: "ok" }));
+// Swagger docs
+app.use("/reference", swaggerUi.serve, swaggerUi.setup(swaggerDocument));
+app.get("/openapi.json", (_, res) => res.json(swaggerDocument));
+
+// ─── Routes ───────────────────────────────────────────────────────────────────
+
+app.use(healthRoutes);
+app.use(uploadRoutes);
+app.use(merchantRoutes);
+app.use(merchantWalletRoutes);
+app.use(userRoutes);
+app.use(eventRoutes);
+
+// ─── Start ────────────────────────────────────────────────────────────────────
 
 async function start() {
   await connectDb();
-  app.listen(3000);
-  console.log(
-    `🦊 Elysia is running at ${app.server?.hostname}:${app.server?.port}`
-  );
+  app.listen(3011, () => {
+    console.log("Express is running at http://localhost:3011");
+  });
 }
 
 start().catch((err) => {
