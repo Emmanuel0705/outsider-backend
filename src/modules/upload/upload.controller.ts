@@ -7,6 +7,12 @@ export async function uploadImageController(req: Request, res: Response) {
     return;
   }
 
+  console.log("Received file upload:", {
+    originalname: req.file.originalname,
+    mimetype: req.file.mimetype,
+    size: req.file.size,
+  });
+
   const folder = (req.query.folder as string) || "uploads";
 
   try {
@@ -19,6 +25,7 @@ export async function uploadImageController(req: Request, res: Response) {
       format: result.format,
     });
   } catch (err) {
+    console.log("Error uploading image:", err);
     const message = err instanceof Error ? err.message : "Upload failed";
     res.status(500).json({ error: message });
   }

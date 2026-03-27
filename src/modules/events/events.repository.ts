@@ -5,7 +5,10 @@ export interface CreateEventData {
   merchantId: mongoose.Types.ObjectId;
   title: string;
   description?: string;
-  location: string;
+  address: string;
+  lga: string;
+  state: string;
+  location?: string;
   startDate: Date;
   endDate?: Date;
   category: string;
@@ -25,6 +28,8 @@ export interface ListEventsFilter {
   merchantId?: mongoose.Types.ObjectId;
   page?: number;
   limit?: number;
+  popular?: boolean;
+  recommended?: boolean;
 }
 
 export async function createEvent(data: CreateEventData) {
@@ -32,7 +37,10 @@ export async function createEvent(data: CreateEventData) {
     merchantId: data.merchantId,
     title: data.title.trim(),
     description: data.description?.trim() ?? "",
-    location: data.location.trim(),
+    address: data.address.trim(),
+    lga: data.lga.trim(),
+    state: data.state.trim(),
+    location: `${data.address.trim()}, ${data.lga.trim()}, ${data.state.trim()}`,
     startDate: data.startDate,
     endDate: data.endDate,
     category: data.category,
@@ -71,9 +79,13 @@ export async function listPublicEvents({
   status = "published",
   page = 1,
   limit = 20,
+  popular,
+  recommended,
 }: ListEventsFilter = {}) {
   const filter: Record<string, unknown> = { status };
   if (category) filter.category = category;
+  if (popular) filter.isPopular = true;
+  if (recommended) filter.isRecommended = true;
 
   const skip = (page - 1) * limit;
   const [events, total] = await Promise.all([

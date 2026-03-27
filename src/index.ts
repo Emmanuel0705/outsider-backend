@@ -11,6 +11,10 @@ import merchantWalletRoutes from "./modules/merchant-wallet/merchant-wallet.rout
 import userRoutes from "./modules/user/user.routes";
 import uploadRoutes from "./modules/upload/upload.routes";
 import eventRoutes from "./modules/events/events.routes";
+import passwordResetRoutes from "./modules/password-reset/password-reset.routes";
+import walletRoutes from "./modules/wallet/wallet.routes";
+import notificationRoutes from "./modules/notifications/notifications.routes";
+import ticketRoutes from "./modules/tickets/tickets.routes";
 
 const app = express();
 
@@ -47,6 +51,10 @@ app.use(merchantRoutes);
 app.use(merchantWalletRoutes);
 app.use(userRoutes);
 app.use(eventRoutes);
+app.use(passwordResetRoutes);
+app.use(walletRoutes);
+app.use(notificationRoutes);
+app.use(ticketRoutes);
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 

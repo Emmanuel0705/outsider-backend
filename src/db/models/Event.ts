@@ -12,6 +12,9 @@ export interface IEvent {
   merchantId: mongoose.Types.ObjectId;
   title: string;
   description?: string;
+  address: string;
+  lga: string;
+  state: string;
   location: string;
   venue?: string;
   startDate: Date;
@@ -22,6 +25,8 @@ export interface IEvent {
   ticketTiers: ITicketTier[];
   status: "draft" | "published" | "cancelled" | "completed";
   isFavoriteCount?: number;
+  isPopular?: boolean;
+  isRecommended?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -47,7 +52,10 @@ const eventSchema = new Schema<IEvent>(
     },
     title: { type: String, required: true, trim: true },
     description: { type: String, trim: true, default: "" },
-    location: { type: String, required: true, trim: true },
+    address: { type: String, required: true, trim: true },
+    lga: { type: String, required: true, trim: true },
+    state: { type: String, required: true, trim: true },
+    location: { type: String, trim: true, default: "" },
     venue: { type: String, trim: true, default: "" },
     startDate: { type: Date, required: true },
     endDate: { type: Date },
@@ -64,6 +72,8 @@ const eventSchema = new Schema<IEvent>(
       default: "draft",
     },
     isFavoriteCount: { type: Number, default: 0 },
+    isPopular: { type: Boolean, default: false },
+    isRecommended: { type: Boolean, default: false },
   },
   { timestamps: true }
 );

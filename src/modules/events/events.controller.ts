@@ -15,7 +15,7 @@ import {
 function parseObjectId(
   value: string,
   label: string,
-  res: Response
+  res: Response,
 ): mongoose.Types.ObjectId | null {
   try {
     return new mongoose.Types.ObjectId(value);
@@ -55,7 +55,9 @@ export async function createEventController(req: Request, res: Response) {
   const {
     title,
     description,
-    location,
+    address,
+    lga,
+    state,
     startDate,
     endDate,
     category,
@@ -64,8 +66,13 @@ export async function createEventController(req: Request, res: Response) {
     status,
   } = req.body;
 
-  if (!title || !location || !startDate || !category) {
-    res.status(400).json({ error: "title, location, startDate and category are required" });
+  if (!title || !address || !lga || !state || !startDate || !category) {
+    res
+      .status(400)
+      .json({
+        error:
+          "title, address, lga, state, startDate and category are required",
+      });
     return;
   }
 
@@ -78,7 +85,9 @@ export async function createEventController(req: Request, res: Response) {
     merchantId: ctx.merchantId,
     title,
     description,
-    location,
+    address,
+    lga,
+    state,
     startDate: new Date(startDate),
     endDate: endDate ? new Date(endDate) : undefined,
     category,
@@ -91,11 +100,13 @@ export async function createEventController(req: Request, res: Response) {
 }
 
 export async function listPublicEventsController(req: Request, res: Response) {
-  const { category, page, limit } = req.query;
+  const { category, page, limit, popular, recommended } = req.query;
   const result = await listPublicEvents({
     category: category as string | undefined,
     page: page ? parseInt(page as string, 10) : 1,
     limit: limit ? parseInt(limit as string, 10) : 20,
+    popular: popular === "true",
+    recommended: recommended === "true",
   });
   res.json(result);
 }
@@ -118,7 +129,7 @@ export async function getMyEventsController(req: Request, res: Response) {
 }
 
 export async function getEventByIdController(req: Request, res: Response) {
-  const id = parseObjectId(req.params.id, "event id", res);
+  const id = parseObjectId(req?.params?.id as any, "event id", res);
   if (!id) return;
 
   const event = await findEventById(id);
@@ -135,7 +146,7 @@ export async function updateEventController(req: Request, res: Response) {
     return;
   }
 
-  const id = parseObjectId(req.params.id, "event id", res);
+  const id = parseObjectId(req.params.id as any, "event id", res);
   if (!id) return;
 
   const ctx = await resolveMerchant(req.user.id, res);
@@ -155,7 +166,7 @@ export async function deleteEventController(req: Request, res: Response) {
     return;
   }
 
-  const id = parseObjectId(req.params.id, "event id", res);
+  const id = parseObjectId(req.params.id as any, "event id", res);
   if (!id) return;
 
   const ctx = await resolveMerchant(req.user.id, res);

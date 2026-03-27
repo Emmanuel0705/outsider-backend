@@ -36,6 +36,6 @@ const userSchema = new Schema<IBetterAuthUser>(
 );
 
 export const BetterAuthUser = model<IBetterAuthUser>(
-  "BetterAuthUser",
+  "user",
   userSchema
 );

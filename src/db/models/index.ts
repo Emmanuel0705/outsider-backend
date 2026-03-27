@@ -1,4 +1,6 @@
 export { Event, type IEvent, type ITicketTier } from "./Event";
+export { UserProfile, type IUserProfile, type INotificationPrefs, DEFAULT_NOTIFICATION_PREFS } from "./UserProfile";
+export { Notification, type INotification, type NotificationType } from "./Notification";
 export {
   Merchant,
   EVENT_CATEGORIES,

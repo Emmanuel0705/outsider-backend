@@ -24,6 +24,7 @@ export async function requireAuth(
   res: Response,
   next: NextFunction,
 ) {
+  console.log("Checking authentication for request:");
   const session = await auth.api.getSession({
     headers: fromNodeHeaders(req.headers),
   });
@@ -32,6 +33,8 @@ export async function requireAuth(
     res.status(401).json({ error: "Unauthorized" });
     return;
   }
+
+  console.log("Authenticated user:", session.user);
 
   req.user = session.user as AuthUser;
   req.session = session.session;
