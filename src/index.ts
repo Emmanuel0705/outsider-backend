@@ -15,6 +15,8 @@ import passwordResetRoutes from "./modules/password-reset/password-reset.routes"
 import walletRoutes from "./modules/wallet/wallet.routes";
 import notificationRoutes from "./modules/notifications/notifications.routes";
 import ticketRoutes from "./modules/tickets/tickets.routes";
+import cardRoutes from "./modules/card/card.routes";
+import adminRoutes from "./modules/admin/admin.routes";
 
 const app = express();
 
@@ -35,7 +37,9 @@ app.use(
 
 // better-auth routes must be registered BEFORE express.json() so that
 // toNodeHandler can read the raw request body stream itself.
-app.all("/api/auth/*", toNodeHandler(auth));
+app.all("/api/auth/*", (req, res, next) => {
+  toNodeHandler(auth)(req, res).catch(next);
+});
 
 app.use(express.json());
 
@@ -55,13 +59,16 @@ app.use(passwordResetRoutes);
 app.use(walletRoutes);
 app.use(notificationRoutes);
 app.use(ticketRoutes);
+app.use(cardRoutes);
+app.use(adminRoutes);
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 
 async function start() {
   await connectDb();
-  app.listen(3011, () => {
-    console.log("Express is running at http://localhost:3011");
+  const port = Number(process.env.PORT ?? 3011);
+  app.listen(port, "0.0.0.0", () => {
+    console.log(`Express is running at http://0.0.0.0:${port}`);
   });
 }
 

@@ -1,14 +1,27 @@
 import "dotenv/config";
+import { createElement } from "react";
 import { betterAuth } from "better-auth";
-import { customSession } from "better-auth/plugins";
+import { customSession, emailOTP } from "better-auth/plugins";
 import { mongodbAdapter } from "better-auth/adapters/mongodb";
 import { expo } from "@better-auth/expo";
 import { MongoClient } from "mongodb";
 import mongoose from "mongoose";
 import { Merchant } from "../db/models";
+import { sendEmail } from "./email";
+import OTPEmail from "../email/otp";
 
-const client = new MongoClient(process.env.MONGODB_URI as string);
-const db = client.db(process.env.DB_NAME ?? "outsiders");
+const MONGODB_URI =
+  process.env.MONGODB_URI ||
+  process.env.DATABASE_URL ||
+  "mongodb://localhost:27017/outsiders";
+
+const DB_NAME = process.env.DB_NAME ?? "outsiders";
+const ENABLE_AUTH_TRANSACTIONS = ["1", "true", "yes", "on"].includes(
+  String(process.env.BETTER_AUTH_ENABLE_TRANSACTIONS ?? "").toLowerCase()
+);
+
+const client = new MongoClient(MONGODB_URI);
+const db = client.db(DB_NAME);
 
 export const auth = betterAuth({
   appName: "outsider",
@@ -20,10 +33,16 @@ export const auth = betterAuth({
     enabled: true,
   },
 
-  database: mongodbAdapter(db, {
-    // Optional: if you don't provide a client, database transactions won't be enabled.
-    client,
-  }),
+  database: mongodbAdapter(
+    db,
+    ENABLE_AUTH_TRANSACTIONS
+      ? {
+          // Better Auth uses Mongo transactions only when `client` is provided.
+          // Keep this opt-in so local standalone MongoDB works without replica set.
+          client,
+        }
+      : undefined
+  ),
   trustedOrigins: [
     "outsiders://", // Development mode - Expo's exp:// scheme with local IP ranges
     "outsiders://*",
@@ -43,6 +62,20 @@ export const auth = betterAuth({
   ],
   plugins: [
     expo(),
+    emailOTP({
+      async sendVerificationOTP({ email, otp, type }) {
+        const subject =
+          type === "email-verification"
+            ? "Verify your Outsiders account"
+            : "Your Outsiders sign-in code";
+        await sendEmail({
+          to: email,
+          subject,
+          react: createElement(OTPEmail, { otp }),
+        });
+      },
+      expiresIn: 600,
+    }),
     customSession(async ({ user, session }) => {
       let merchant = null;
       if (user?.id) {

@@ -43,6 +43,8 @@ const accountSchema = new Schema<IBetterAuthAccount>(
     timestamps: true,
     collection: "account",
     _id: false,
+    autoIndex: false,
+    autoCreate: false,
   }
 );
 

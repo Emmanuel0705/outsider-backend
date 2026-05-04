@@ -8,12 +8,12 @@
     "start": "bun run src/index.ts"
   },
   "dependencies": {
-    "@better-auth/expo": "^1.4.13",
+    "@better-auth/expo": "^1.6.2",
     "@react-email/components": "^1.0.4",
     "@types/multer": "^2.0.0",
     "@types/react": "^19.2.8",
     "axios": "^1.13.6",
-    "better-auth": "^1.4.13",
+    "better-auth": "^1.6.2",
     "cloudinary": "^2.9.0",
     "cors": "^2.8.6",
     "expo-image-picker": "~17.0.10",

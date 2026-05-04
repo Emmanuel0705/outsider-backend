@@ -1,14 +1,14 @@
-import mongoose, { Schema, model } from "mongoose";
+import { Schema, model } from "mongoose";
 
 /**
  * Better Auth – Verification schema (reference only).
- * Source: https://www.better-auth.com/docs/concepts/database#verification
  * Table/Collection name: "verification"
- * Used for email verification, OTP, password reset, etc.
- * Better Auth manages this collection; this model is for reference and optional reads.
+ *
+ * Better Auth's MongoDB adapter stores its logical `id` as the document's `_id`
+ * (a plain string). We reflect that here so create/upsert operations work correctly.
  */
 export interface IBetterAuthVerification {
-  id: string;
+  _id: string;
   identifier: string;
   value: string;
   expiresAt: Date;
@@ -18,7 +18,7 @@ export interface IBetterAuthVerification {
 
 const verificationSchema = new Schema<IBetterAuthVerification>(
   {
-    id: { type: String, required: true, unique: true },
+    _id: { type: String },
     identifier: { type: String, required: true, index: true },
     value: { type: String, required: true },
     expiresAt: { type: Date, required: true },
@@ -28,7 +28,8 @@ const verificationSchema = new Schema<IBetterAuthVerification>(
   {
     timestamps: true,
     collection: "verification",
-    _id: false,
+    autoIndex: false,
+    autoCreate: false,
   }
 );
 

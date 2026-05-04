@@ -32,6 +32,8 @@ const sessionSchema = new Schema<IBetterAuthSession>(
     timestamps: true,
     collection: "session",
     _id: false,
+    autoIndex: false,
+    autoCreate: false,
   }
 );
 

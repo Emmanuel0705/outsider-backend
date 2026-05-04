@@ -1,15 +1,16 @@
-import mongoose, { Schema, model } from "mongoose";
+import { Schema, model } from "mongoose";
 
 /**
  * Better Auth – User schema (reference only).
  * Source: https://www.better-auth.com/docs/concepts/database#user
  * Table/Collection name: "user"
- * Better Auth manages this collection via the native MongoDB adapter; this model
- * is for reference, population, and optional server-side reads. Do not use for writes –
- * use Better Auth APIs (signUp, updateUser, etc.) instead.
+ *
+ * Better Auth's MongoDB adapter stores its logical `id` as the document's `_id`
+ * (a plain string, not an ObjectId). We reflect that here so `.lean()` queries
+ * return a correctly-typed `_id` that can be passed back to Better Auth APIs.
  */
 export interface IBetterAuthUser {
-  id: string;
+  _id: string;
   name: string;
   email: string;
   emailVerified: boolean;
@@ -20,7 +21,7 @@ export interface IBetterAuthUser {
 
 const userSchema = new Schema<IBetterAuthUser>(
   {
-    id: { type: String, required: true, unique: true },
+    _id: { type: String },
     name: { type: String, required: true },
     email: { type: String, required: true },
     emailVerified: { type: Boolean, required: true, default: false },
@@ -30,12 +31,10 @@ const userSchema = new Schema<IBetterAuthUser>(
   },
   {
     timestamps: true,
-    collection: "user", // match Better Auth collection name
-    _id: false,
+    collection: "user",
+    autoIndex: false,
+    autoCreate: false,
   }
 );
 
-export const BetterAuthUser = model<IBetterAuthUser>(
-  "user",
-  userSchema
-);
+export const BetterAuthUser = model<IBetterAuthUser>("BetterAuthUser", userSchema);

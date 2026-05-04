@@ -5,7 +5,8 @@ export type TransactionType =
   | "payout"
   | "refund"
   | "top_up"
-  | "transfer";
+  | "transfer"
+  | "card_order";
 
 export interface ITransaction {
   userId: mongoose.Types.ObjectId;
@@ -34,7 +35,14 @@ const transactionSchema = new Schema<ITransaction>(
     type: {
       type: String,
       required: true,
-      enum: ["ticket_purchase", "payout", "refund", "top_up", "transfer"],
+      enum: [
+        "ticket_purchase",
+        "payout",
+        "refund",
+        "top_up",
+        "transfer",
+        "card_order",
+      ],
     },
     amount: { type: Number, required: true },
     currency: { type: String, default: "NGN" },
