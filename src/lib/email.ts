@@ -34,14 +34,26 @@ export async function sendEmail({
   }
 
   try {
-    const data = await resend.emails.send({
+    const result = await resend.emails.send({
       from: process.env.RESEND_FROM,
       to: [to],
       subject,
       react,
     } as CreateEmailOptions);
 
-    console.log("✅ Email sent successfully:", data);
+    // Resend returns { data, error } instead of throwing on non-2xx from their
+    // API (e.g. unverified `from` domain, invalid recipient). Turn that into a
+    // real throw so callers can surface a proper failure instead of silently
+    // logging "success" while nothing was delivered.
+    if (result && "error" in result && result.error) {
+      const message =
+        typeof result.error === "object" && result.error && "message" in result.error
+          ? (result.error as { message?: string }).message
+          : JSON.stringify(result.error);
+      throw new Error(`Resend send failed: ${message}`);
+    }
+
+    console.log("✅ Email sent successfully:", result?.data ?? result);
   } catch (error) {
     console.error("❌ Error sending email:", error);
     throw error;

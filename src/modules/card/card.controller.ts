@@ -4,6 +4,7 @@ import { nanoid } from "nanoid";
 import { CardBinding } from "../../db/models/CardBinding";
 import { CardOrder, type CardOrderStatus } from "../../db/models/CardOrder";
 import { Transaction } from "../../db/models/Transaction";
+import { VirtualCard } from "../../db/models/VirtualCard";
 import { Wallet } from "../../db/models/Wallet";
 import { findOrCreateWallet } from "../wallet/wallet.repository";
 
@@ -46,6 +47,45 @@ function parseCardId(input: string): string | null {
   return null;
 }
 
+function generateVirtualCardId() {
+  return `vc-${nanoid(14).toLowerCase()}`;
+}
+
+/**
+ * Every authenticated user owns exactly one virtual card. Created lazily on
+ * first read so we don't need a migration or a signup hook. Idempotent — a
+ * unique index on userId means the retry path after a race still returns the
+ * one that was actually persisted.
+ */
+export async function getOrIssueVirtualCard(userId: mongoose.Types.ObjectId) {
+  const existing = await VirtualCard.findOne({ userId }).lean();
+  if (existing) return existing;
+
+  try {
+    const created = await VirtualCard.create({
+      userId,
+      virtualCardId: generateVirtualCardId(),
+    });
+    return created.toObject();
+  } catch (error) {
+    // Race: another request just inserted one — return it.
+    const raced = await VirtualCard.findOne({ userId }).lean();
+    if (raced) return raced;
+    throw error;
+  }
+}
+
+function toVirtualCardResponse(v: {
+  virtualCardId: string;
+  issuedAt: Date;
+}) {
+  return {
+    virtualCardId: v.virtualCardId,
+    issuedAt: v.issuedAt,
+    qrPayload: `outsider://card?vid=${v.virtualCardId}`,
+  };
+}
+
 function serializeOrder(order: {
   _id: unknown;
   fullName: string;
@@ -58,6 +98,7 @@ function serializeOrder(order: {
   reference: string;
   status: CardOrderStatus;
   cardId?: string;
+  virtualCardId?: string;
   deliveredAt?: Date;
   activatedAt?: Date;
   createdAt: Date;
@@ -75,6 +116,7 @@ function serializeOrder(order: {
     reference: order.reference,
     status: order.status,
     cardId: order.cardId ?? null,
+    virtualCardId: order.virtualCardId ?? null,
     deliveredAt: order.deliveredAt ?? null,
     activatedAt: order.activatedAt ?? null,
     createdAt: order.createdAt,
@@ -89,9 +131,10 @@ export async function getCardOverviewController(req: Request, res: Response) {
     return;
   }
 
-  const [order, binding] = await Promise.all([
+  const [order, binding, virtual] = await Promise.all([
     CardOrder.findOne({ userId }).sort({ createdAt: -1 }).lean(),
     CardBinding.findOne({ userId }).lean(),
+    getOrIssueVirtualCard(userId),
   ]);
 
   res.json({
@@ -103,6 +146,7 @@ export async function getCardOverviewController(req: Request, res: Response) {
           connectedAt: binding.connectedAt,
         }
       : null,
+    virtualCard: toVirtualCardResponse(virtual),
     order: order ? serializeOrder(order) : null,
   });
 }
@@ -274,6 +318,80 @@ export async function connectCardController(req: Request, res: Response) {
     }
     throw error;
   }
+}
+
+function parseVirtualCardId(input: string): string | null {
+  const raw = input.trim();
+  if (!raw) return null;
+
+  try {
+    const url = new URL(raw);
+    const id =
+      url.searchParams.get("vid") ?? url.searchParams.get("virtualCardId");
+    if (id && /^[A-Za-z0-9_-]{4,64}$/.test(id)) return id.toLowerCase();
+  } catch {
+    // Not a URL: fall through.
+  }
+
+  const match = raw.match(/[?&](?:vid|virtualCardId)=([A-Za-z0-9_-]{4,64})/);
+  if (match?.[1]) return match[1].toLowerCase();
+
+  if (/^[A-Za-z0-9_-]{4,64}$/.test(raw)) return raw.toLowerCase();
+  return null;
+}
+
+/**
+ * Resolves either a virtual card QR payload or a physical NFC card id to the
+ * owning user. This is the single entry-point for tap-to-pay / scan-to-enter
+ * flows — both card types are first-class.
+ */
+export async function resolveCardController(req: Request, res: Response) {
+  const payload = normalizeText(req.body?.payload);
+  const rawVirtual = normalizeText(req.body?.virtualCardId);
+  const rawPhysical = normalizeText(req.body?.cardId);
+
+  const virtualCardId =
+    parseVirtualCardId(rawVirtual) ?? parseVirtualCardId(payload);
+  const physicalCardId = parseCardId(rawPhysical) ?? parseCardId(payload);
+
+  if (!virtualCardId && !physicalCardId) {
+    res.status(400).json({ error: "Provide a card payload, virtualCardId, or cardId." });
+    return;
+  }
+
+  const virtualQuery = virtualCardId
+    ? VirtualCard.findOne({ virtualCardId })
+    : null;
+  const legacyOrderQuery = virtualCardId
+    ? CardOrder.findOne({ virtualCardId })
+    : null;
+  const bindingQuery = physicalCardId
+    ? CardBinding.findOne({ cardId: physicalCardId })
+    : null;
+
+  const [virtual, legacyOrder, binding] = await Promise.all([
+    virtualQuery ? virtualQuery.lean() : Promise.resolve(null),
+    legacyOrderQuery ? legacyOrderQuery.lean() : Promise.resolve(null),
+    bindingQuery ? bindingQuery.lean() : Promise.resolve(null),
+  ]);
+
+  const ownerUserId =
+    (virtual?.userId ? String(virtual.userId) : null) ??
+    (legacyOrder?.userId ? String(legacyOrder.userId) : null) ??
+    (binding?.userId ? String(binding.userId) : null);
+
+  if (!ownerUserId) {
+    res.status(404).json({ error: "Card not recognized." });
+    return;
+  }
+
+  res.json({
+    success: true,
+    kind: virtualCardId ? "virtual" : "physical",
+    userId: ownerUserId,
+    virtualCardId: virtual?.virtualCardId ?? legacyOrder?.virtualCardId ?? null,
+    physicalCardId: binding?.cardId ?? legacyOrder?.cardId ?? null,
+  });
 }
 
 export async function updateCardOrderStatusController(

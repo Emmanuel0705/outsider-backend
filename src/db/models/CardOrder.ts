@@ -19,6 +19,7 @@ export interface ICardOrder {
   reference: string;
   status: CardOrderStatus;
   cardId?: string;
+  virtualCardId?: string;
   deliveredAt?: Date;
   activatedAt?: Date;
   createdAt: Date;
@@ -48,6 +49,14 @@ const cardOrderSchema = new Schema<ICardOrder>(
       default: "pending",
     },
     cardId: { type: String, trim: true, lowercase: true },
+    virtualCardId: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      unique: true,
+      sparse: true,
+      index: true,
+    },
     deliveredAt: { type: Date },
     activatedAt: { type: Date },
   },

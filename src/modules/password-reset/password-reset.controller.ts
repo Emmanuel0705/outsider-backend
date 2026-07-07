@@ -10,6 +10,10 @@ function generateOTP(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
+function escapeRegex(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 const OTP_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
 const OTP_IDENTIFIER_PREFIX = "password-reset-otp:";
@@ -29,10 +33,18 @@ export async function requestPasswordReset(req: Request, res: Response) {
   }
 
   const normalised = email.trim().toLowerCase();
-  const user = await BetterAuthUser.findOne({ email: normalised }).lean();
+
+  // Case-insensitive lookup: Better Auth doesn't force-lowercase on write, so a
+  // stored `John@example.com` would silently miss a lowercased query.
+  const user = await BetterAuthUser.findOne({
+    email: { $regex: `^${escapeRegex(normalised)}$`, $options: "i" },
+  }).lean();
 
   if (!user) {
-    // Return success to avoid leaking which emails are registered
+    // Return success to avoid leaking which emails are registered.
+    console.info(
+      `[password-reset] request for unknown email: ${normalised} — no email sent`,
+    );
     res.json({ success: true });
     return;
   }
@@ -48,17 +60,30 @@ export async function requestPasswordReset(req: Request, res: Response) {
       $setOnInsert: { _id: randomBytes(16).toString("hex") },
       $set: { identifier, value: otp, expiresAt, updatedAt: now },
     },
-    { upsert: true, new: true }
+    { upsert: true, new: true },
   );
 
-  await sendEmail({
-    to: normalised,
-    subject: "Your password reset code",
-    react: React.createElement(ResetPasswordOTPEmail, {
-      otp,
-      name: user.name,
-    }),
-  });
+  try {
+    await sendEmail({
+      to: user.email,
+      subject: "Your password reset code",
+      react: React.createElement(ResetPasswordOTPEmail, {
+        otp,
+        name: user.name,
+      }),
+    });
+  } catch (error) {
+    // Surface a real error instead of a fake success — the caller can't
+    // retry intelligently otherwise.
+    console.error("[password-reset] failed to send OTP email:", error);
+    res
+      .status(502)
+      .json({
+        error:
+          "Could not send the reset code. Please try again in a moment.",
+      });
+    return;
+  }
 
   res.json({ success: true });
 }
@@ -90,7 +115,9 @@ export async function verifyResetOTP(req: Request, res: Response) {
 
   if (new Date() > verification.expiresAt) {
     await BetterAuthVerification.deleteOne({ identifier });
-    res.status(400).json({ error: "Code has expired. Please request a new one." });
+    res
+      .status(400)
+      .json({ error: "Code has expired. Please request a new one." });
     return;
   }
 
@@ -101,7 +128,9 @@ export async function verifyResetOTP(req: Request, res: Response) {
 
   await BetterAuthVerification.deleteOne({ identifier });
 
-  const user = await BetterAuthUser.findOne({ email: normalised }).lean();
+  const user = await BetterAuthUser.findOne({
+    email: { $regex: `^${escapeRegex(normalised)}$`, $options: "i" },
+  }).lean();
   if (!user) {
     res.status(400).json({ error: "User not found." });
     return;

@@ -13,6 +13,7 @@ export { AccountStatus, type IAccountStatus } from "./AccountStatus";
 export { MerchantWallet, type IMerchantWallet } from "./MerchantWallet";
 export { CardOrder, type ICardOrder, type CardOrderStatus } from "./CardOrder";
 export { CardBinding, type ICardBinding } from "./CardBinding";
+export { VirtualCard, type IVirtualCard } from "./VirtualCard";
 export {
   Transaction,
   type ITransaction,
