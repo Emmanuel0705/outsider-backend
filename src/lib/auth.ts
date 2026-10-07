@@ -23,6 +23,13 @@ const ENABLE_AUTH_TRANSACTIONS = ["1", "true", "yes", "on"].includes(
 const client = new MongoClient(MONGODB_URI);
 const db = client.db(DB_NAME);
 
+// Extra origins (e.g. the web app) allowed to call auth, comma-separated:
+// WEB_ORIGINS=http://localhost:3010,https://app.example.com
+const WEB_ORIGINS = (process.env.WEB_ORIGINS ?? "")
+  .split(",")
+  .map((origin) => origin.trim().replace(/\/$/, ""))
+  .filter(Boolean);
+
 export const auth = betterAuth({
   appName: "outsider",
   baseURL: process.env.BETTER_AUTH_URL,
@@ -59,6 +66,7 @@ export const auth = betterAuth({
     "http://localhost:8081", // Trust localhost HTTP
     "http://localhost:8081/*", // Trust all localhost HTTP paths
     "http://localhost:3011",
+    ...WEB_ORIGINS,
   ],
   plugins: [
     expo(),
