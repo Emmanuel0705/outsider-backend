@@ -13,3 +13,10 @@ bun run dev
 ```
 
 Open http://localhost:3000/ with your browser to see the result.
+
+## Web app origins
+Browser clients must be listed in better-auth's trusted origins. Set `WEB_ORIGINS`
+to a comma-separated list of exact origins (no trailing path):
+```bash
+WEB_ORIGINS=http://localhost:3010,https://app.outsiderbyremy.com
+```
