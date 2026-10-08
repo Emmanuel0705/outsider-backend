@@ -5,6 +5,14 @@ import axios from "axios";
 import { Wallet } from "../../db/models/Wallet";
 import { Transaction } from "../../db/models/Transaction";
 import { findOrCreateWallet } from "./wallet.repository";
+import {
+  MIN_TOPUP_NGN,
+  checkOwnership,
+  checkPaystackPayment,
+  parseTopUpAmount,
+  toKobo,
+  type PaystackVerifyData,
+} from "./wallet.verification";
 
 const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET_KEY ?? "";
 
@@ -16,23 +24,43 @@ export async function getWalletController(req: Request, res: Response) {
   res.json({ wallet });
 }
 
-// ─── Initiate top-up (generate reference for Paystack) ───────────────────────
+// ─── Initiate top-up ─────────────────────────────────────────────────────────
+// Records a pending top-up owned by the caller. Verification later credits only
+// this record, for exactly this amount (see wallet.verification.ts).
 
 export async function initiateTopUpController(req: Request, res: Response) {
-  const { amount } = req.body as { amount?: number };
+  const userId = new mongoose.Types.ObjectId(req.user!.id);
+  const amount = parseTopUpAmount((req.body as { amount?: unknown }).amount);
 
-  if (!amount || typeof amount !== "number" || amount < 100) {
-    res.status(400).json({ error: "Minimum amount is ₦100" });
+  if (amount === null) {
+    res.status(400).json({ error: `Minimum amount is ₦${MIN_TOPUP_NGN}` });
     return;
   }
 
-  // Generate a unique reference for this transaction
   const reference = `TXN-TOPUP-${nanoid(12).toUpperCase()}`;
-
-  res.json({
+  await Transaction.create({
+    userId,
+    type: "top_up",
+    amount,
+    currency: "NGN",
+    status: "pending",
     reference,
-    amountKobo: Math.round(amount * 100), // Paystack expects kobo
+    metadata: { source: "paystack" },
   });
+
+  res.json({ reference, amountKobo: toKobo(amount) });
+}
+
+function walletResponse(wallet: { _id: unknown; userId: unknown; balance: number; currency: string; status: string } | null) {
+  return wallet
+    ? {
+        _id: String(wallet._id),
+        userId: String(wallet.userId),
+        balance: wallet.balance,
+        currency: wallet.currency,
+        status: wallet.status,
+      }
+    : null;
 }
 
 // ─── Verify top-up (called after Paystack payment succeeds) ──────────────────
@@ -41,35 +69,35 @@ export async function verifyTopUpController(req: Request, res: Response) {
   const userId = new mongoose.Types.ObjectId(req.user!.id);
   const { reference } = req.body as { reference?: string };
 
-  if (!reference) {
+  if (!reference || typeof reference !== "string") {
     res.status(400).json({ error: "Reference is required" });
     return;
   }
 
-  // Check if already processed (idempotency)
-  const existing = await Transaction.findOne({ reference }).lean();
-  if (existing) {
-    if (existing.status === "completed") {
-      const wallet = await findOrCreateWallet(userId);
-      res.json({ success: true, wallet });
-      return;
-    }
-    res.status(400).json({ error: "Transaction already processed" });
+  const tx = await Transaction.findOne({ reference, type: "top_up" }).lean();
+
+  // Idempotent: verifying your own already-credited top-up again just returns the wallet.
+  if (tx && tx.userId.equals(userId) && tx.status === "completed") {
+    res.json({ success: true, wallet: walletResponse(await findOrCreateWallet(userId)) });
     return;
   }
 
-  // Verify with Paystack
-  let paystackData: {
-    status: boolean;
-    data: { status: string; amount: number; currency: string };
-  };
+  const pending = tx
+    ? { userId: String(tx.userId), amount: tx.amount, currency: tx.currency, status: tx.status }
+    : null;
+  const owner = checkOwnership(pending, String(userId));
+  if (!owner.ok) {
+    res.status(owner.code === "not_found" ? 404 : 400).json({ error: owner.message });
+    return;
+  }
+
+  let paystack: { status: boolean; data: PaystackVerifyData };
   try {
     const { data } = await axios.get(
       `https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`,
-      { headers: { Authorization: `Bearer ${PAYSTACK_SECRET}` } },
+      { headers: { Authorization: `Bearer ${PAYSTACK_SECRET}` }, timeout: 15_000 },
     );
-    // console.log("Paystack verification response:", data);
-    paystackData = data;
+    paystack = data;
   } catch (err: unknown) {
     const msg =
       axios.isAxiosError(err) && err.response?.data?.message
@@ -79,48 +107,56 @@ export async function verifyTopUpController(req: Request, res: Response) {
     return;
   }
 
-  if (!paystackData.status || paystackData.data.status !== "success") {
-    res.status(400).json({ error: "Payment not successful" });
+  const payment = paystack.status
+    ? checkPaystackPayment(pending!, reference, paystack.data)
+    : ({ ok: false, code: "not_successful", message: "Payment not successful" } as const);
+  if (!payment.ok) {
+    if (payment.code === "mismatch") {
+      // Never credit a payment that doesn't match what was initiated.
+      await Transaction.updateOne(
+        { _id: tx!._id, status: "pending" },
+        { $set: { status: "failed", "metadata.failure": "amount_or_currency_mismatch", "metadata.paystackAmountKobo": paystack.data.amount } },
+      );
+    }
+    res.status(400).json({ error: payment.message });
     return;
   }
 
-  const amountNGN = paystackData.data.amount / 100; // convert from kobo
-
-  // Ensure wallet exists then credit
   await findOrCreateWallet(userId);
 
-  const updatedWallet = await Wallet.findOneAndUpdate(
-    { userId },
-    { $inc: { balance: amountNGN } },
+  // Atomically claim the pending record; only one concurrent verify can win.
+  const claimed = await Transaction.findOneAndUpdate(
+    { _id: tx!._id, userId, status: "pending" },
+    { $set: { status: "completed", "metadata.paystackStatus": paystack.data.status } },
     { new: true },
   ).lean();
 
-  // Record transaction
-  await Transaction.create({
-    userId,
-    type: "top_up",
-    amount: amountNGN,
-    currency: paystackData.data.currency ?? "NGN",
-    status: "completed",
-    reference,
-    metadata: { source: "paystack", paystackStatus: paystackData.data.status },
-  });
+  if (!claimed) {
+    // Another request completed it first: don't credit again.
+    res.json({ success: true, wallet: walletResponse(await findOrCreateWallet(userId)) });
+    return;
+  }
 
-  res.json({
-    success: true,
-    wallet: updatedWallet
-      ? {
-          _id: String(updatedWallet._id),
-          userId: String(updatedWallet.userId),
-          balance: updatedWallet.balance,
-          currency: updatedWallet.currency,
-          status: updatedWallet.status,
-        }
-      : null,
-  });
+  try {
+    const updatedWallet = await Wallet.findOneAndUpdate(
+      { userId },
+      { $inc: { balance: claimed.amount } },
+      { new: true },
+    ).lean();
+    res.json({ success: true, wallet: walletResponse(updatedWallet) });
+  } catch (err) {
+    // Release the claim so the user can retry verification.
+    await Transaction.updateOne({ _id: claimed._id, status: "completed" }, { $set: { status: "pending" } });
+    throw err;
+  }
 }
 
 // ─── Get user transactions ────────────────────────────────────────────────────
+
+// Initiated-but-unpaid (or rejected) top-ups are internal records, not activity.
+function visibleToUser(userId: mongoose.Types.ObjectId) {
+  return { userId, $nor: [{ type: "top_up", status: { $in: ["pending", "failed"] } }] };
+}
 
 export async function getUserTransactionsController(
   req: Request,
@@ -135,12 +171,12 @@ export async function getUserTransactionsController(
   const skip = (page - 1) * limit;
 
   const [transactions, total] = await Promise.all([
-    Transaction.find({ userId })
+    Transaction.find(visibleToUser(userId))
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
       .lean(),
-    Transaction.countDocuments({ userId }),
+    Transaction.countDocuments(visibleToUser(userId)),
   ]);
 
   res.json({
