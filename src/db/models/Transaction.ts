@@ -57,6 +57,12 @@ const transactionSchema = new Schema<ITransaction>(
   { timestamps: true }
 );
 
+// One record per Paystack top-up reference (other types may share an order reference).
+transactionSchema.index(
+  { reference: 1 },
+  { unique: true, partialFilterExpression: { type: "top_up" }, name: "unique_topup_reference" }
+);
+
 export const Transaction = model<ITransaction>(
   "Transaction",
   transactionSchema
