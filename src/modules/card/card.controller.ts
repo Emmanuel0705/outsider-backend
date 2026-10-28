@@ -7,6 +7,11 @@ import { Transaction } from "../../db/models/Transaction";
 import { VirtualCard } from "../../db/models/VirtualCard";
 import { Wallet } from "../../db/models/Wallet";
 import { findOrCreateWallet } from "../wallet/wallet.repository";
+import { DEFAULT_APP_URL, parseVirtualCardId, profileUrl } from "../checkin/checkin.rules";
+
+// QR codes become public profile links once the web app serves /u/:id.
+const QR_PROFILE_LINKS = ["1", "true", "yes", "on"].includes(String(process.env.QR_PROFILE_LINKS ?? "").toLowerCase());
+const APP_URL = process.env.APP_URL || DEFAULT_APP_URL;
 
 const CARD_PRICE_NGN = Number(process.env.CARD_PRICE_NGN ?? "5000");
 const CARD_ADMIN_KEY = process.env.CARD_ADMIN_KEY ?? "";
@@ -82,7 +87,10 @@ function toVirtualCardResponse(v: {
   return {
     virtualCardId: v.virtualCardId,
     issuedAt: v.issuedAt,
-    qrPayload: `outsider://card?vid=${v.virtualCardId}`,
+    qrPayload: QR_PROFILE_LINKS
+      ? profileUrl(v.virtualCardId, APP_URL)
+      : `outsider://card?vid=${v.virtualCardId}`,
+    profileUrl: profileUrl(v.virtualCardId, APP_URL),
   };
 }
 
@@ -320,26 +328,6 @@ export async function connectCardController(req: Request, res: Response) {
   }
 }
 
-function parseVirtualCardId(input: string): string | null {
-  const raw = input.trim();
-  if (!raw) return null;
-
-  try {
-    const url = new URL(raw);
-    const id =
-      url.searchParams.get("vid") ?? url.searchParams.get("virtualCardId");
-    if (id && /^[A-Za-z0-9_-]{4,64}$/.test(id)) return id.toLowerCase();
-  } catch {
-    // Not a URL: fall through.
-  }
-
-  const match = raw.match(/[?&](?:vid|virtualCardId)=([A-Za-z0-9_-]{4,64})/);
-  if (match?.[1]) return match[1].toLowerCase();
-
-  if (/^[A-Za-z0-9_-]{4,64}$/.test(raw)) return raw.toLowerCase();
-  return null;
-}
-
 /**
  * Resolves either a virtual card QR payload or a physical NFC card id to the
  * owning user. This is the single entry-point for tap-to-pay / scan-to-enter
@@ -387,8 +375,7 @@ export async function resolveCardController(req: Request, res: Response) {
 
   res.json({
     success: true,
-    kind: virtualCardId ? "virtual" : "physical",
-    userId: ownerUserId,
+    kind: virtual || legacyOrder ? "virtual" : "physical",
     virtualCardId: virtual?.virtualCardId ?? legacyOrder?.virtualCardId ?? null,
     physicalCardId: binding?.cardId ?? legacyOrder?.cardId ?? null,
   });

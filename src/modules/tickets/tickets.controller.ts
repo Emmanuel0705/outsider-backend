@@ -6,6 +6,7 @@ import { Wallet } from "../../db/models/Wallet";
 import { MerchantWallet } from "../../db/models/MerchantWallet";
 import { Order } from "../../db/models/Order";
 import { Transaction } from "../../db/models/Transaction";
+import { CheckIn } from "../../db/models/CheckIn";
 import { findOrCreateWallet } from "../wallet/wallet.repository";
 
 // ─── Buy tickets ──────────────────────────────────────────────────────────────
@@ -209,6 +210,13 @@ export async function getMyTicketsController(req: Request, res: Response) {
     .lean();
 
   const eventMap = Object.fromEntries(events.map((e) => [String(e._id), e]));
+  const checkIns = await CheckIn.find({
+    userId,
+    eventId: { $in: eventIds.map((id) => new mongoose.Types.ObjectId(id)) },
+  })
+    .select("eventId checkedInAt")
+    .lean();
+  const checkedInByEvent = Object.fromEntries(checkIns.map((c) => [String(c.eventId), c.checkedInAt]));
 
   res.json({
     orders: orders.map((o) => {
@@ -225,6 +233,7 @@ export async function getMyTicketsController(req: Request, res: Response) {
         currency: o.currency,
         status: o.status,
         paymentReference: o.paymentReference,
+        checkedInAt: checkedInByEvent[String(o.eventId)] ?? null,
         createdAt: o.createdAt,
       };
     }),

@@ -17,6 +17,7 @@ import notificationRoutes from "./modules/notifications/notifications.routes";
 import ticketRoutes from "./modules/tickets/tickets.routes";
 import cardRoutes from "./modules/card/card.routes";
 import adminRoutes from "./modules/admin/admin.routes";
+import checkInRoutes from "./modules/checkin/checkin.routes";
 
 const app = express();
 
@@ -61,6 +62,7 @@ app.use(notificationRoutes);
 app.use(ticketRoutes);
 app.use(cardRoutes);
 app.use(adminRoutes);
+app.use(checkInRoutes);
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 

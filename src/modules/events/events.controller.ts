@@ -1,6 +1,8 @@
 import { Request, Response } from "express";
 import mongoose from "mongoose";
 import { findMerchantByUserId } from "../merchant/merchant.repository";
+import { getOptionalSession } from "../../lib/optional-session";
+import { clampPaging, searchPattern } from "../checkin/checkin.rules";
 import {
   createEvent,
   deleteEvent,
@@ -100,13 +102,14 @@ export async function createEventController(req: Request, res: Response) {
 }
 
 export async function listPublicEventsController(req: Request, res: Response) {
-  const { category, page, limit, popular, recommended } = req.query;
+  const { category, page, limit, popular, recommended, upcoming, q } = req.query;
   const result = await listPublicEvents({
-    category: category as string | undefined,
-    page: page ? parseInt(page as string, 10) : 1,
-    limit: limit ? parseInt(limit as string, 10) : 20,
+    category: typeof category === "string" && category ? category : undefined,
+    ...clampPaging(page, limit),
     popular: popular === "true",
     recommended: recommended === "true",
+    upcoming: upcoming === "true",
+    search: searchPattern(q),
   });
   res.json(result);
 }
@@ -136,6 +139,17 @@ export async function getEventByIdController(req: Request, res: Response) {
   if (!event) {
     res.status(404).json({ error: "Event not found" });
     return;
+  }
+  // Drafts and cancelled events are only visible to the organizer who owns them.
+  if (event.status !== "published" && event.status !== "completed") {
+    const session = await getOptionalSession(req);
+    const merchant = session?.user?.id && mongoose.isValidObjectId(session.user.id)
+      ? await findMerchantByUserId(new mongoose.Types.ObjectId(session.user.id))
+      : null;
+    if (!merchant || String(merchant._id) !== String(event.merchantId)) {
+      res.status(404).json({ error: "Event not found" });
+      return;
+    }
   }
   res.json({ event });
 }

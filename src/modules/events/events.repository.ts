@@ -23,6 +23,8 @@ export interface CreateEventData {
 }
 
 export interface ListEventsFilter {
+  upcoming?: boolean;
+  search?: RegExp | null;
   category?: string;
   status?: string;
   merchantId?: mongoose.Types.ObjectId;
@@ -81,9 +83,23 @@ export async function listPublicEvents({
   limit = 20,
   popular,
   recommended,
+  upcoming,
+  search,
 }: ListEventsFilter = {}) {
   const filter: Record<string, unknown> = { status };
   if (category) filter.category = category;
+  if (upcoming) {
+    const now = new Date();
+    filter.$or = [
+      { endDate: { $gte: now } },
+      { endDate: null, startDate: { $gte: new Date(now.getTime() - 12 * 3600_000) } },
+    ];
+  }
+  if (search) {
+    filter.$and = [
+      { $or: [{ title: search }, { location: search }, { venue: search }, { state: search }, { category: search }] },
+    ];
+  }
   if (popular) filter.isPopular = true;
   if (recommended) filter.isRecommended = true;
 
