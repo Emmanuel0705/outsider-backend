@@ -15,6 +15,11 @@ export function profileUrl(virtualCardId: string, appUrl = DEFAULT_APP_URL) {
   return `${appUrl.replace(/\/+$/, "")}/u/${virtualCardId}`;
 }
 
+/** Link programmed into physical NFC cards (and any QR printed on them). */
+export function cardUrl(cardId: string, appUrl = DEFAULT_APP_URL) {
+  return `${appUrl.replace(/\/+$/, "")}/c/${cardId}`;
+}
+
 /** Accepts a virtual card id in any form we have ever printed into a QR. */
 export function parseVirtualCardId(input: string): string | null {
   const raw = input.trim();
@@ -36,20 +41,25 @@ export function parseVirtualCardId(input: string): string | null {
   return VIRTUAL_ID.test(raw) ? raw.toLowerCase() : null;
 }
 
-/** Physical NFC cards encode `...?id=<cardId>` (or the bare id). */
+/**
+ * Physical NFC cards: `https://app…/c/<cardId>`, the older `…/card?id=<cardId>`
+ * (also without a scheme, e.g. `appurl/card?id=…`), or the bare id.
+ */
 export function parsePhysicalCardId(input: string): string | null {
   const raw = input.trim();
   if (!raw || VIRTUAL_ID.test(raw)) return null;
+  const ok = (id: string | null | undefined) => (id && PHYSICAL_ID.test(id) && !VIRTUAL_ID.test(id) ? id.toLowerCase() : null);
 
   try {
     const url = new URL(raw);
-    const id = url.searchParams.get("id");
-    return id && PHYSICAL_ID.test(id) ? id.toLowerCase() : null;
+    return ok(url.pathname.match(/^\/c\/([^/]+)\/?$/)?.[1]) ?? ok(url.searchParams.get("id"));
   } catch {
-    // Not a URL.
+    // Not a full URL: fall through.
   }
 
-  return PHYSICAL_ID.test(raw) ? raw.toLowerCase() : null;
+  const fromPath = raw.match(/(?:^|\/)c\/([A-Za-z0-9_-]{8,128})\/?$/)?.[1];
+  const fromQuery = raw.match(/[?&]id=([A-Za-z0-9_-]{8,128})/)?.[1];
+  return ok(fromPath) ?? ok(fromQuery) ?? ok(raw);
 }
 
 /** What a scanner read → which credential it is. Virtual wins when both match. */

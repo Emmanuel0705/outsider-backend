@@ -7,7 +7,7 @@ import { Transaction } from "../../db/models/Transaction";
 import { VirtualCard } from "../../db/models/VirtualCard";
 import { Wallet } from "../../db/models/Wallet";
 import { findOrCreateWallet } from "../wallet/wallet.repository";
-import { DEFAULT_APP_URL, profileUrl } from "../checkin/checkin.rules";
+import { DEFAULT_APP_URL, parsePhysicalCardId, profileUrl } from "../checkin/checkin.rules";
 
 // QR codes become public profile links once the web app serves /u/:id.
 const QR_PROFILE_LINKS = ["1", "true", "yes", "on"].includes(String(process.env.QR_PROFILE_LINKS ?? "").toLowerCase());
@@ -30,27 +30,8 @@ function toUserObjectId(req: Request): mongoose.Types.ObjectId | null {
   }
 }
 
-function parseCardId(input: string): string | null {
-  const raw = input.trim();
-  if (!raw) return null;
-
-  try {
-    const url = new URL(raw);
-    const id = url.searchParams.get("id");
-    if (id && /^[A-Za-z0-9_-]{8,128}$/.test(id)) {
-      return id.toLowerCase();
-    }
-  } catch {
-    // Not a URL: continue fallback parsing.
-  }
-
-  const match = raw.match(/[?&]id=([A-Za-z0-9_-]{8,128})/);
-  if (match?.[1]) return match[1].toLowerCase();
-
-  if (/^[A-Za-z0-9_-]{8,128}$/.test(raw)) return raw.toLowerCase();
-
-  return null;
-}
+/** Shared with check-in: `…/c/<id>`, `…/card?id=<id>` or a bare id. */
+const parseCardId = parsePhysicalCardId;
 
 function generateVirtualCardId() {
   return `vc-${nanoid(14).toLowerCase()}`;

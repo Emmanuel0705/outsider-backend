@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import {
+  cardUrl,
   checkInWindow,
   clampPaging,
   displayName,
@@ -19,6 +20,12 @@ describe("parseEntryPayload", () => {
   it("still reads legacy QR codes and bare ids", () => {
     expect(parseEntryPayload(`outsider://card?vid=${VC}`)).toEqual({ kind: "virtual", id: VC });
     expect(parseEntryPayload(`  ${VC} `)).toEqual({ kind: "virtual", id: VC });
+  });
+  it("reads the physical card link in every printed form", () => {
+    expect(parseEntryPayload("https://app.outsiderbyremy.com/c/CARD12345678")).toEqual({ kind: "physical", id: "card12345678" });
+    expect(parseEntryPayload("appurl/card?id=CARD12345678")).toEqual({ kind: "physical", id: "card12345678" });
+    expect(parseEntryPayload(cardUrl("card12345678", "https://app.example.com/"))).toEqual({ kind: "physical", id: "card12345678" });
+    expect(parseEntryPayload("https://app.outsiderbyremy.com/c/vc-ab12cd34ef56gh")).toBeNull();
   });
   it("reads physical NFC card payloads", () => {
     expect(parseEntryPayload("https://outsiders.app/c?id=CARD12345678")).toEqual({ kind: "physical", id: "card12345678" });

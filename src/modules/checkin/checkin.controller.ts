@@ -7,6 +7,7 @@ import { Event } from "../../db/models/Event";
 import { Merchant } from "../../db/models/Merchant";
 import { Order } from "../../db/models/Order";
 import { VirtualCard } from "../../db/models/VirtualCard";
+import { getOrIssueVirtualCard } from "../card/card.controller";
 import {
   checkInWindow,
   displayName,
@@ -105,6 +106,24 @@ export async function getPublicProfileController(req: Request, res: Response) {
       memberSince: user.createdAt ?? null,
     },
   });
+}
+
+/**
+ * A tapped physical card → the owner's public profile id, so a phone that
+ * reads the card opens the same profile as their QR. Unconnected cards 404.
+ */
+export async function getPublicCardController(req: Request, res: Response) {
+  const code = parseEntryPayload(String(req.params.cardId ?? ""));
+  const binding = code?.kind === "physical" ? await CardBinding.findOne({ cardId: code.id }).select("userId").lean() : null;
+  const legacy = !binding && code?.kind === "physical" ? await CardOrder.findOne({ cardId: code.id }).select("userId").lean() : null;
+  const ownerId = binding?.userId ?? legacy?.userId;
+  if (!ownerId) {
+    res.status(404).json({ status: "not_connected", error: "This card isn't connected to an account yet." });
+    return;
+  }
+  const card = await getOrIssueVirtualCard(ownerId);
+  res.set("Cache-Control", "public, max-age=60");
+  res.json({ publicId: card.virtualCardId });
 }
 
 // ─── Check in ────────────────────────────────────────────────────────────────
