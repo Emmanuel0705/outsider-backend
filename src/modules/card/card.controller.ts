@@ -7,7 +7,7 @@ import { Transaction } from "../../db/models/Transaction";
 import { VirtualCard } from "../../db/models/VirtualCard";
 import { Wallet } from "../../db/models/Wallet";
 import { findOrCreateWallet } from "../wallet/wallet.repository";
-import { DEFAULT_APP_URL, parseVirtualCardId, profileUrl } from "../checkin/checkin.rules";
+import { DEFAULT_APP_URL, profileUrl } from "../checkin/checkin.rules";
 
 // QR codes become public profile links once the web app serves /u/:id.
 const QR_PROFILE_LINKS = ["1", "true", "yes", "on"].includes(String(process.env.QR_PROFILE_LINKS ?? "").toLowerCase());
@@ -326,59 +326,6 @@ export async function connectCardController(req: Request, res: Response) {
     }
     throw error;
   }
-}
-
-/**
- * Resolves either a virtual card QR payload or a physical NFC card id to the
- * owning user. This is the single entry-point for tap-to-pay / scan-to-enter
- * flows — both card types are first-class.
- */
-export async function resolveCardController(req: Request, res: Response) {
-  const payload = normalizeText(req.body?.payload);
-  const rawVirtual = normalizeText(req.body?.virtualCardId);
-  const rawPhysical = normalizeText(req.body?.cardId);
-
-  const virtualCardId =
-    parseVirtualCardId(rawVirtual) ?? parseVirtualCardId(payload);
-  const physicalCardId = parseCardId(rawPhysical) ?? parseCardId(payload);
-
-  if (!virtualCardId && !physicalCardId) {
-    res.status(400).json({ error: "Provide a card payload, virtualCardId, or cardId." });
-    return;
-  }
-
-  const virtualQuery = virtualCardId
-    ? VirtualCard.findOne({ virtualCardId })
-    : null;
-  const legacyOrderQuery = virtualCardId
-    ? CardOrder.findOne({ virtualCardId })
-    : null;
-  const bindingQuery = physicalCardId
-    ? CardBinding.findOne({ cardId: physicalCardId })
-    : null;
-
-  const [virtual, legacyOrder, binding] = await Promise.all([
-    virtualQuery ? virtualQuery.lean() : Promise.resolve(null),
-    legacyOrderQuery ? legacyOrderQuery.lean() : Promise.resolve(null),
-    bindingQuery ? bindingQuery.lean() : Promise.resolve(null),
-  ]);
-
-  const ownerUserId =
-    (virtual?.userId ? String(virtual.userId) : null) ??
-    (legacyOrder?.userId ? String(legacyOrder.userId) : null) ??
-    (binding?.userId ? String(binding.userId) : null);
-
-  if (!ownerUserId) {
-    res.status(404).json({ error: "Card not recognized." });
-    return;
-  }
-
-  res.json({
-    success: true,
-    kind: virtual || legacyOrder ? "virtual" : "physical",
-    virtualCardId: virtual?.virtualCardId ?? legacyOrder?.virtualCardId ?? null,
-    physicalCardId: binding?.cardId ?? legacyOrder?.cardId ?? null,
-  });
 }
 
 export async function updateCardOrderStatusController(

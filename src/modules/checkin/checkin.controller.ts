@@ -90,16 +90,16 @@ const isDuplicateKey = (error: unknown) =>
 
 export async function getPublicProfileController(req: Request, res: Response) {
   const publicId = parseVirtualCardId(String(req.params.publicId ?? ""));
-  const card = publicId ? await VirtualCard.findOne({ virtualCardId: publicId }).select("userId virtualCardId").lean() : null;
-  const user = card ? (await findUsers([card.userId])).get(String(card.userId)) : undefined;
-  if (!card || !user) {
+  const holderId = publicId ? await resolveHolder({ kind: "virtual", id: publicId }) : null;
+  const user = holderId ? (await findUsers([holderId])).get(String(holderId)) : undefined;
+  if (!holderId || !user || !publicId) {
     res.status(404).json({ error: "Profile not found" });
     return;
   }
   res.set("Cache-Control", "public, max-age=60");
   res.json({
     profile: {
-      publicId: card.virtualCardId,
+      publicId,
       name: displayName(user.name),
       image: user.image ?? null,
       memberSince: user.createdAt ?? null,
@@ -210,6 +210,34 @@ export async function checkInController(req: Request, res: Response) {
     checkedInAt: existing?.checkedInAt ?? null,
     totalAdmitted: existing?.admitted ?? entitlement.admitted,
     attendee,
+  });
+}
+
+// ─── Resolve a scanned code (merchant tools) ─────────────────────────────────
+
+/**
+ * Who does this QR / NFC code belong to? Merchant-only, and it returns the same
+ * minimal attendee view as check-in: never user ids or the other card's id.
+ */
+export async function resolveEntryController(req: Request, res: Response) {
+  const ctx = await requireMerchant(req, res);
+  if (!ctx) return;
+  const raw = [req.body?.payload, req.body?.virtualCardId, req.body?.cardId].find((v) => typeof v === "string" && v.trim());
+  const code = parseEntryPayload(raw);
+  if (!code) {
+    res.status(400).json({ status: "invalid_code", error: "That isn't an Outsiders code." });
+    return;
+  }
+  const holderId = await resolveHolder(code);
+  if (!holderId) {
+    res.status(404).json({ status: "unknown_code", error: "We don't recognise this code." });
+    return;
+  }
+  const [users, publicIds] = await Promise.all([findUsers([holderId]), publicIdsFor([holderId])]);
+  res.json({
+    success: true,
+    kind: code.kind,
+    attendee: attendeeView(users.get(String(holderId)), publicIds.get(String(holderId)) ?? null),
   });
 }
 
