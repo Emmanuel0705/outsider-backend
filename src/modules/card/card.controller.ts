@@ -7,6 +7,11 @@ import { Transaction } from "../../db/models/Transaction";
 import { VirtualCard } from "../../db/models/VirtualCard";
 import { Wallet } from "../../db/models/Wallet";
 import { findOrCreateWallet } from "../wallet/wallet.repository";
+import { DEFAULT_APP_URL, parsePhysicalCardId, profileUrl } from "../checkin/checkin.rules";
+
+// QR codes become public profile links once the web app serves /u/:id.
+const QR_PROFILE_LINKS = ["1", "true", "yes", "on"].includes(String(process.env.QR_PROFILE_LINKS ?? "").toLowerCase());
+const APP_URL = process.env.APP_URL || DEFAULT_APP_URL;
 
 const CARD_PRICE_NGN = Number(process.env.CARD_PRICE_NGN ?? "5000");
 const CARD_ADMIN_KEY = process.env.CARD_ADMIN_KEY ?? "";
@@ -25,27 +30,8 @@ function toUserObjectId(req: Request): mongoose.Types.ObjectId | null {
   }
 }
 
-function parseCardId(input: string): string | null {
-  const raw = input.trim();
-  if (!raw) return null;
-
-  try {
-    const url = new URL(raw);
-    const id = url.searchParams.get("id");
-    if (id && /^[A-Za-z0-9_-]{8,128}$/.test(id)) {
-      return id.toLowerCase();
-    }
-  } catch {
-    // Not a URL: continue fallback parsing.
-  }
-
-  const match = raw.match(/[?&]id=([A-Za-z0-9_-]{8,128})/);
-  if (match?.[1]) return match[1].toLowerCase();
-
-  if (/^[A-Za-z0-9_-]{8,128}$/.test(raw)) return raw.toLowerCase();
-
-  return null;
-}
+/** Shared with check-in: `…/c/<id>`, `…/card?id=<id>` or a bare id. */
+const parseCardId = parsePhysicalCardId;
 
 function generateVirtualCardId() {
   return `vc-${nanoid(14).toLowerCase()}`;
@@ -82,7 +68,10 @@ function toVirtualCardResponse(v: {
   return {
     virtualCardId: v.virtualCardId,
     issuedAt: v.issuedAt,
-    qrPayload: `outsider://card?vid=${v.virtualCardId}`,
+    qrPayload: QR_PROFILE_LINKS
+      ? profileUrl(v.virtualCardId, APP_URL)
+      : `outsider://card?vid=${v.virtualCardId}`,
+    profileUrl: profileUrl(v.virtualCardId, APP_URL),
   };
 }
 
@@ -318,80 +307,6 @@ export async function connectCardController(req: Request, res: Response) {
     }
     throw error;
   }
-}
-
-function parseVirtualCardId(input: string): string | null {
-  const raw = input.trim();
-  if (!raw) return null;
-
-  try {
-    const url = new URL(raw);
-    const id =
-      url.searchParams.get("vid") ?? url.searchParams.get("virtualCardId");
-    if (id && /^[A-Za-z0-9_-]{4,64}$/.test(id)) return id.toLowerCase();
-  } catch {
-    // Not a URL: fall through.
-  }
-
-  const match = raw.match(/[?&](?:vid|virtualCardId)=([A-Za-z0-9_-]{4,64})/);
-  if (match?.[1]) return match[1].toLowerCase();
-
-  if (/^[A-Za-z0-9_-]{4,64}$/.test(raw)) return raw.toLowerCase();
-  return null;
-}
-
-/**
- * Resolves either a virtual card QR payload or a physical NFC card id to the
- * owning user. This is the single entry-point for tap-to-pay / scan-to-enter
- * flows — both card types are first-class.
- */
-export async function resolveCardController(req: Request, res: Response) {
-  const payload = normalizeText(req.body?.payload);
-  const rawVirtual = normalizeText(req.body?.virtualCardId);
-  const rawPhysical = normalizeText(req.body?.cardId);
-
-  const virtualCardId =
-    parseVirtualCardId(rawVirtual) ?? parseVirtualCardId(payload);
-  const physicalCardId = parseCardId(rawPhysical) ?? parseCardId(payload);
-
-  if (!virtualCardId && !physicalCardId) {
-    res.status(400).json({ error: "Provide a card payload, virtualCardId, or cardId." });
-    return;
-  }
-
-  const virtualQuery = virtualCardId
-    ? VirtualCard.findOne({ virtualCardId })
-    : null;
-  const legacyOrderQuery = virtualCardId
-    ? CardOrder.findOne({ virtualCardId })
-    : null;
-  const bindingQuery = physicalCardId
-    ? CardBinding.findOne({ cardId: physicalCardId })
-    : null;
-
-  const [virtual, legacyOrder, binding] = await Promise.all([
-    virtualQuery ? virtualQuery.lean() : Promise.resolve(null),
-    legacyOrderQuery ? legacyOrderQuery.lean() : Promise.resolve(null),
-    bindingQuery ? bindingQuery.lean() : Promise.resolve(null),
-  ]);
-
-  const ownerUserId =
-    (virtual?.userId ? String(virtual.userId) : null) ??
-    (legacyOrder?.userId ? String(legacyOrder.userId) : null) ??
-    (binding?.userId ? String(binding.userId) : null);
-
-  if (!ownerUserId) {
-    res.status(404).json({ error: "Card not recognized." });
-    return;
-  }
-
-  res.json({
-    success: true,
-    kind: virtualCardId ? "virtual" : "physical",
-    userId: ownerUserId,
-    virtualCardId: virtual?.virtualCardId ?? legacyOrder?.virtualCardId ?? null,
-    physicalCardId: binding?.cardId ?? legacyOrder?.cardId ?? null,
-  });
 }
 
 export async function updateCardOrderStatusController(
