@@ -8,6 +8,10 @@ import { Order } from "../../db/models/Order";
 import { Transaction } from "../../db/models/Transaction";
 import { CheckIn } from "../../db/models/CheckIn";
 import { findOrCreateWallet } from "../wallet/wallet.repository";
+import { findUsers } from "../../lib/users";
+import { displayName } from "../checkin/checkin.rules";
+import { orderTotal, splitGifts } from "./ticket-delivery";
+import { deliverPurchase } from "./ticket-notifier";
 
 // ─── Buy tickets ──────────────────────────────────────────────────────────────
 //
@@ -20,13 +24,18 @@ import { findOrCreateWallet } from "../wallet/wallet.repository";
 //   6. Create user Transaction (ticket_purchase, completed)
 //   7. Credit merchant pendingBalance (cannot withdraw until released)
 //   8. Create merchant Transaction (ticket_purchase, pending)
+//   9. Notify the buyer (+ email) and everyone they bought for
+//
+// Tickets for other people (`gifts`) become their own paid orders, so they show
+// in the recipient's tickets and their own QR/card gets them in.
 
 export async function buyTicketsController(req: Request, res: Response) {
   const userId = new mongoose.Types.ObjectId(req.user!.id);
 
-  const { eventId, items } = req.body as {
+  const { eventId, items, gifts } = req.body as {
     eventId?: string;
     items?: Array<{ ticketTierId: string; quantity: number }>;
+    gifts?: unknown;
   };
 
   if (!eventId || !Array.isArray(items) || items.length === 0) {
@@ -89,6 +98,25 @@ export async function buyTicketsController(req: Request, res: Response) {
     });
   }
 
+  // Who gets which tickets. Checked before any money moves.
+  const split = splitGifts(
+    validatedItems.map((i) => ({ ...i, ticketTierId: String(i.ticketTierId) })),
+    gifts,
+    String(userId)
+  );
+  if (!split.ok) {
+    res.status(400).json({ error: split.error });
+    return;
+  }
+  const recipientIds = split.recipients.map((r) => new mongoose.Types.ObjectId(r.userId));
+  if (recipientIds.length) {
+    const found = await findUsers(recipientIds);
+    if (found.size !== recipientIds.length) {
+      res.status(400).json({ error: "One of the people you're buying for no longer has an account." });
+      return;
+    }
+  }
+
   // Ensure user wallet exists, then atomically deduct
   await findOrCreateWallet(userId);
   const updatedUserWallet = await Wallet.findOneAndUpdate(
@@ -113,22 +141,30 @@ export async function buyTicketsController(req: Request, res: Response) {
   const reference = `TXN-TKT-${nanoid(12).toUpperCase()}`;
   const merchantId = event.merchantId;
 
-  // Create order
-  const order = await Order.create({
-    userId,
-    eventId: eventObjId,
-    merchantId,
-    items: validatedItems.map((i) => ({
-      ticketTierName: i.ticketTierName,
-      quantity: i.quantity,
-      unitPrice: i.unitPrice,
-      currency: "NGN",
-    })),
-    totalAmount: total,
-    currency: "NGN",
-    status: "paid",
-    paymentReference: reference,
-  });
+  const toOrderItems = (list: typeof split.self) =>
+    list.map((i) => ({ ticketTierName: i.ticketTierName, quantity: i.quantity, unitPrice: i.unitPrice, currency: "NGN" }));
+  const baseOrder = { eventId: eventObjId, merchantId, currency: "NGN", status: "paid" as const, paymentReference: reference };
+
+  // The buyer's own tickets (none when they only bought for others)
+  const buyerOrder = split.self.length
+    ? await Order.create({ ...baseOrder, userId, items: toOrderItems(split.self), totalAmount: orderTotal(split.self) })
+    : null;
+
+  // One order per person they bought for
+  const giftOrders = [];
+  for (const recipient of split.recipients) {
+    const recipientId = new mongoose.Types.ObjectId(recipient.userId);
+    const giftOrder = await Order.create({
+      ...baseOrder,
+      userId: recipientId,
+      purchasedBy: userId,
+      items: toOrderItems(recipient.items),
+      totalAmount: orderTotal(recipient.items),
+    });
+    giftOrders.push({ recipientId, order: giftOrder });
+  }
+  // The money moved once; transactions point at the buyer's order (or the first gift).
+  const order = buyerOrder ?? giftOrders[0]!.order;
 
   // User transaction
   await Transaction.create({
@@ -140,7 +176,7 @@ export async function buyTicketsController(req: Request, res: Response) {
     currency: "NGN",
     status: "completed",
     reference,
-    metadata: { eventId: String(eventObjId), eventTitle: event.title },
+    metadata: { eventId: String(eventObjId), eventTitle: event.title, giftedTo: giftOrders.length },
   });
 
   // Credit merchant pending balance (not available — cannot withdraw yet)
@@ -166,21 +202,36 @@ export async function buyTicketsController(req: Request, res: Response) {
     metadata: { eventId: String(eventObjId), eventTitle: event.title, note: "pending_release" },
   });
 
+  const serialize = (o: NonNullable<typeof buyerOrder>) => ({
+    _id: String(o._id),
+    eventId: String(o.eventId),
+    eventTitle: event.title,
+    eventLocation: event.location ?? "",
+    eventDate: event.startDate ?? "",
+    items: o.items,
+    totalAmount: o.totalAmount,
+    currency: o.currency,
+    status: o.status,
+    paymentReference: o.paymentReference,
+    createdAt: o.createdAt,
+  });
+
   res.status(201).json({
     success: true,
-    order: {
-      _id: String(order._id),
-      eventId: String(order.eventId),
-      eventTitle: event.title,
-      eventLocation: event.location ?? "",
-      eventDate: event.startDate ?? "",
-      items: order.items,
-      totalAmount: order.totalAmount,
-      currency: order.currency,
-      status: order.status,
-      paymentReference: order.paymentReference,
-      createdAt: order.createdAt,
-    },
+    // The buyer's order; null when every ticket went to someone else.
+    order: buyerOrder ? serialize(buyerOrder) : null,
+    gifts: giftOrders.map((g) => ({ orderId: String(g.order._id), recipientId: String(g.recipientId) })),
+    totalAmount: total,
+  });
+
+  void deliverPurchase({
+    buyerId: userId,
+    buyerEmail: req.user?.email,
+    event: { title: event.title, startDate: event.startDate, location: event.location, address: event.address, venue: event.venue },
+    reference,
+    total,
+    buyerOrder,
+    gifts: giftOrders,
   });
 }
 
@@ -217,6 +268,9 @@ export async function getMyTicketsController(req: Request, res: Response) {
     .select("eventId checkedInAt")
     .lean();
   const checkedInByEvent = Object.fromEntries(checkIns.map((c) => [String(c.eventId), c.checkedInAt]));
+  const gifters = await findUsers(
+    [...new Set(orders.flatMap((o) => (o.purchasedBy ? [String(o.purchasedBy)] : [])))].map((id) => new mongoose.Types.ObjectId(id))
+  );
 
   res.json({
     orders: orders.map((o) => {
@@ -234,6 +288,8 @@ export async function getMyTicketsController(req: Request, res: Response) {
         status: o.status,
         paymentReference: o.paymentReference,
         checkedInAt: checkedInByEvent[String(o.eventId)] ?? null,
+        // Gifts show who bought them (first name + initial only).
+        purchasedBy: o.purchasedBy ? { name: displayName(gifters.get(String(o.purchasedBy))?.name) } : null,
         createdAt: o.createdAt,
       };
     }),

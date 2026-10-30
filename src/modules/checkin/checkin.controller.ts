@@ -7,6 +7,7 @@ import { Event } from "../../db/models/Event";
 import { Merchant } from "../../db/models/Merchant";
 import { Order } from "../../db/models/Order";
 import { VirtualCard } from "../../db/models/VirtualCard";
+import { findUsers, type UserDoc } from "../../lib/users";
 import { getOrIssueVirtualCard } from "../card/card.controller";
 import {
   checkInWindow,
@@ -22,19 +23,6 @@ import {
 function toObjectId(value: unknown): mongoose.Types.ObjectId | null {
   if (typeof value !== "string" || !mongoose.isValidObjectId(value)) return null;
   return new mongoose.Types.ObjectId(value);
-}
-
-type UserDoc = { _id: unknown; name?: string; image?: string | null; createdAt?: Date };
-
-/** better-auth's `user` collection (ids may be stored as ObjectId or string). */
-async function findUsers(ids: mongoose.Types.ObjectId[]): Promise<Map<string, UserDoc>> {
-  if (ids.length === 0) return new Map();
-  const users = await mongoose.connection
-    .db!.collection<UserDoc>("user")
-    .find({ _id: { $in: [...ids, ...ids.map(String)] as never[] } })
-    .project<UserDoc>({ name: 1, image: 1, createdAt: 1 })
-    .toArray();
-  return new Map(users.map((u) => [String(u._id), u]));
 }
 
 async function publicIdsFor(userIds: mongoose.Types.ObjectId[]) {

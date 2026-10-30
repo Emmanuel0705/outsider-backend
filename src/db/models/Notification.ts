@@ -16,6 +16,8 @@ export interface INotification extends Document {
   title: string;
   body: string;
   avatar?: string;
+  /** In-app path the notification opens, e.g. /tickets/<orderId>. */
+  link?: string;
   isRead: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -41,6 +43,7 @@ const notificationSchema = new Schema<INotification>(
     title: { type: String, required: true, trim: true },
     body: { type: String, required: true, trim: true },
     avatar: { type: String },
+    link: { type: String, trim: true },
     isRead: { type: Boolean, default: false },
   },
   { timestamps: true }

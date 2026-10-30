@@ -16,6 +16,8 @@ export interface IOrder {
   currency: string;
   status: "pending" | "paid" | "cancelled" | "refunded";
   paymentReference?: string;
+  /** Set when someone else paid for this ticket (a gift). */
+  purchasedBy?: mongoose.Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -66,6 +68,7 @@ const orderSchema = new Schema<IOrder>(
       default: "pending",
     },
     paymentReference: { type: String, trim: true },
+    purchasedBy: { type: Schema.Types.ObjectId, ref: "User", index: true },
   },
   { timestamps: true }
 );
