@@ -10,7 +10,8 @@ export async function createNotification(
   type: NotificationType,
   title: string,
   body: string,
-  avatar?: string
+  avatar?: string,
+  link?: string
 ) {
-  return Notification.create({ userId, type, title, body, avatar });
+  return Notification.create({ userId, type, title, body, avatar, link });
 }

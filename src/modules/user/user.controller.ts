@@ -122,7 +122,7 @@ export async function lookupUserByEmailController(req: Request, res: Response) {
 
   const found = await UserCollection().findOne(
     { email },
-    { projection: { id: 1, name: 1, email: 1 } }
+    { projection: { _id: 1, name: 1, email: 1 } }
   );
 
   if (!found) {
@@ -130,5 +130,6 @@ export async function lookupUserByEmailController(req: Request, res: Response) {
     return;
   }
 
-  res.json({ user: { id: found.id, name: found.name, email: found.email } });
+  // better-auth stores the id as `_id`; the raw document has no `id` field.
+  res.json({ user: { id: String(found._id), name: found.name, email: found.email } });
 }
