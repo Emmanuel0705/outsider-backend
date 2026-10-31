@@ -166,12 +166,12 @@ export async function updateEventController(req: Request, res: Response) {
   const ctx = await resolveMerchant(req.user.id, res);
   if (!ctx) return;
 
-  const updated = await updateEvent(id, ctx.merchantId, req.body);
-  if (!updated) {
-    res.status(404).json({ error: "Event not found or not owned by you" });
+  const result = await updateEvent(id, ctx.merchantId, (req.body ?? {}) as Record<string, unknown>);
+  if (!result.ok) {
+    res.status(result.status).json({ error: result.error });
     return;
   }
-  res.json({ event: updated });
+  res.json({ event: result.event });
 }
 
 export async function deleteEventController(req: Request, res: Response) {
