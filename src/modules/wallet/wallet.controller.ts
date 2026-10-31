@@ -7,6 +7,7 @@ import { Transaction } from "../../db/models/Transaction";
 import { findOrCreateWallet } from "./wallet.repository";
 import {
   MIN_TOPUP_NGN,
+  chargeFor,
   checkOwnership,
   checkPaystackPayment,
   parseTopUpAmount,
@@ -37,6 +38,9 @@ export async function initiateTopUpController(req: Request, res: Response) {
     return;
   }
 
+  // The user covers Paystack's fee: they're charged `charge`, the wallet gets `amount`.
+  const charge = chargeFor(amount);
+  const fee = Math.round((charge - amount) * 100) / 100;
   const reference = `TXN-TOPUP-${nanoid(12).toUpperCase()}`;
   await Transaction.create({
     userId,
@@ -45,10 +49,10 @@ export async function initiateTopUpController(req: Request, res: Response) {
     currency: "NGN",
     status: "pending",
     reference,
-    metadata: { source: "paystack" },
+    metadata: { source: "paystack", charge, fee },
   });
 
-  res.json({ reference, amountKobo: toKobo(amount) });
+  res.json({ reference, amountKobo: toKobo(charge), amount, fee, total: charge });
 }
 
 function walletResponse(wallet: { _id: unknown; userId: unknown; balance: number; currency: string; status: string } | null) {
@@ -83,7 +87,13 @@ export async function verifyTopUpController(req: Request, res: Response) {
   }
 
   const pending = tx
-    ? { userId: String(tx.userId), amount: tx.amount, currency: tx.currency, status: tx.status }
+    ? {
+        userId: String(tx.userId),
+        amount: tx.amount,
+        charge: typeof tx.metadata?.charge === "number" ? tx.metadata.charge : undefined,
+        currency: tx.currency,
+        status: tx.status,
+      }
     : null;
   const owner = checkOwnership(pending, String(userId));
   if (!owner.ok) {
@@ -127,7 +137,14 @@ export async function verifyTopUpController(req: Request, res: Response) {
   // Atomically claim the pending record; only one concurrent verify can win.
   const claimed = await Transaction.findOneAndUpdate(
     { _id: tx!._id, userId, status: "pending" },
-    { $set: { status: "completed", "metadata.paystackStatus": paystack.data.status } },
+    {
+      $set: {
+        status: "completed",
+        amount: payment.credit,
+        "metadata.paystackStatus": paystack.data.status,
+        "metadata.paidKobo": paystack.data.amount,
+      },
+    },
     { new: true },
   ).lean();
 

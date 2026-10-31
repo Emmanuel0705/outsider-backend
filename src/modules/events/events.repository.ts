@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { Event, type ITicketTier } from "../../db/models";
+import { planTierUpdate } from "./event-tiers";
 
 export interface CreateEventData {
   merchantId: mongoose.Types.ObjectId;
@@ -111,17 +112,106 @@ export async function listPublicEvents({
   return { events, total, page, limit };
 }
 
+const TEXT_FIELDS = ["title", "description", "address", "lga", "state", "venue", "category", "image"] as const;
+
+export type UpdateEventResult =
+  | { ok: true; event: Awaited<ReturnType<typeof findEventById>> }
+  | { ok: false; status: 400 | 404 | 409; error: string };
+
+/**
+ * Owner update. Only editable fields are applied (never sold counts, merchant
+ * or promotion flags). Ticket tiers are merged, not replaced: see planTierUpdate.
+ */
 export async function updateEvent(
   id: mongoose.Types.ObjectId,
   merchantId: mongoose.Types.ObjectId,
-  updates: Partial<CreateEventData>
-) {
-  const doc = await Event.findOneAndUpdate(
-    { _id: id, merchantId },
-    { $set: updates },
-    { new: true }
-  ).lean();
-  return doc;
+  body: Record<string, unknown>
+): Promise<UpdateEventResult> {
+  const current = await Event.findOne({ _id: id, merchantId }).lean();
+  if (!current) return { ok: false, status: 404, error: "Event not found or not owned by you" };
+
+  const set: Record<string, unknown> = {};
+  for (const field of TEXT_FIELDS) {
+    if (body[field] === undefined) continue;
+    if (typeof body[field] !== "string") return { ok: false, status: 400, error: `${field} must be text` };
+    set[field] = (body[field] as string).trim();
+  }
+  if ((set.title as string | undefined) === "") return { ok: false, status: 400, error: "Title can't be empty" };
+  if (Array.isArray(body.images)) set.images = body.images.filter((x): x is string => typeof x === "string").slice(0, 20);
+  for (const field of ["startDate", "endDate"] as const) {
+    if (body[field] === undefined) continue;
+    if (body[field] === null && field === "endDate") {
+      set.endDate = null;
+      continue;
+    }
+    const date = new Date(body[field] as string);
+    if (Number.isNaN(date.getTime())) return { ok: false, status: 400, error: `${field} is not a valid date` };
+    set[field] = date;
+  }
+  if (body.status !== undefined) {
+    // Organizers switch between draft and published; cancelled/completed are admin-managed.
+    if (body.status !== "draft" && body.status !== "published") return { ok: false, status: 400, error: "Invalid status" };
+    if (current.status !== "draft" && current.status !== "published") return { ok: false, status: 409, error: `A ${current.status} event can't be republished` };
+    set.status = body.status;
+  }
+  if (set.address !== undefined || set.lga !== undefined || set.state !== undefined) {
+    const address = (set.address as string | undefined) ?? current.address;
+    const lga = (set.lga as string | undefined) ?? current.lga;
+    const state = (set.state as string | undefined) ?? current.state;
+    set.location = `${address}, ${lga}, ${state}`;
+  }
+
+  let plan: ReturnType<typeof planTierUpdate> | null = null;
+  if (body.ticketTiers !== undefined) {
+    plan = planTierUpdate(
+      current.ticketTiers.map((t) => ({
+        _id: String((t as { _id?: unknown })._id),
+        name: t.name,
+        price: t.price,
+        totalQuantity: t.totalQuantity,
+        soldQuantity: t.soldQuantity ?? 0,
+      })),
+      body.ticketTiers
+    );
+    if (!plan.ok) return { ok: false, status: 400, error: plan.error };
+  }
+
+  if (Object.keys(set).length) await Event.updateOne({ _id: id, merchantId }, { $set: set });
+
+  if (plan?.ok) {
+    // One atomic update per tier. soldQuantity is never written; the filter makes
+    // sure a sale that landed while the organizer was editing still fits.
+    for (const change of plan.updates) {
+      const result = await Event.updateOne(
+        { _id: id, merchantId, ticketTiers: { $elemMatch: { _id: new mongoose.Types.ObjectId(change.id), soldQuantity: { $lte: change.totalQuantity } } } },
+        {
+          $set: {
+            "ticketTiers.$[tier].name": change.name,
+            "ticketTiers.$[tier].price": change.price,
+            "ticketTiers.$[tier].totalQuantity": change.totalQuantity,
+          },
+        },
+        { arrayFilters: [{ "tier._id": new mongoose.Types.ObjectId(change.id) }] }
+      );
+      if (result.matchedCount === 0) {
+        return { ok: false, status: 409, error: `More "${change.name}" tickets sold while you were editing. Reload and try again.` };
+      }
+    }
+    if (plan.removes.length) {
+      await Event.updateOne(
+        { _id: id, merchantId },
+        { $pull: { ticketTiers: { _id: { $in: plan.removes.map((x) => new mongoose.Types.ObjectId(x)) }, soldQuantity: 0 } } }
+      );
+    }
+    if (plan.adds.length) {
+      await Event.updateOne(
+        { _id: id, merchantId },
+        { $push: { ticketTiers: { $each: plan.adds.map((t) => ({ ...t, soldQuantity: 0, currency: "NGN" })) } } }
+      );
+    }
+  }
+
+  return { ok: true, event: await findEventById(id) };
 }
 
 export async function deleteEvent(

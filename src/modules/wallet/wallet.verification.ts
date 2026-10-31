@@ -13,10 +13,46 @@ export function parseTopUpAmount(amount: unknown): number | null {
 }
 
 export const toKobo = (naira: number) => Math.round(naira * 100);
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+// ─── Paystack fee (paid by the user on top of their top-up) ──────────────────
+// Paystack Nigeria, local cards: 1.5% + ₦100, the ₦100 waived under ₦2,500,
+// total capped at ₦2,000. Overridable if Paystack's pricing changes.
+const envNumber = (name: string, fallback: number) => {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value >= 0 ? value : fallback;
+};
+export const PAYSTACK_FEE = {
+  percent: envNumber("PAYSTACK_FEE_PERCENT", 1.5) / 100,
+  flat: envNumber("PAYSTACK_FEE_FLAT_NGN", 100),
+  flatFrom: envNumber("PAYSTACK_FEE_FLAT_FROM_NGN", 2500),
+  cap: envNumber("PAYSTACK_FEE_CAP_NGN", 2000),
+};
+
+/** What Paystack keeps from a charge of `charge` naira. */
+export function paystackFee(charge: number, fee = PAYSTACK_FEE): number {
+  const flat = charge >= fee.flatFrom ? fee.flat : 0;
+  return round2(Math.min(charge * fee.percent + flat, fee.cap));
+}
+
+/**
+ * Whole-naira amount to charge so that, after Paystack's fee, at least
+ * `amount` is left for the wallet.
+ */
+export function chargeFor(amount: number, fee = PAYSTACK_FEE): number {
+  let gross = amount / (1 - fee.percent);
+  if (gross >= fee.flatFrom) gross = (amount + fee.flat) / (1 - fee.percent);
+  if (gross - amount > fee.cap) gross = amount + fee.cap;
+  let charge = Math.ceil(round2(gross));
+  while (charge - paystackFee(charge, fee) < amount) charge += 1;
+  return charge;
+}
 
 export interface PendingTopUp {
   userId: string;
-  amount: number; // naira
+  amount: number; // naira credited to the wallet
+  /** Naira the user is charged (amount + Paystack fee). Absent on older records. */
+  charge?: number;
   currency: string;
   status: "pending" | "completed" | "failed" | "reversed";
 }
@@ -40,14 +76,25 @@ export function checkOwnership(tx: PendingTopUp | null, userId: string): TopUpCh
   return { ok: true };
 }
 
-/** Does Paystack's record match exactly what this user started? */
-export function checkPaystackPayment(tx: PendingTopUp, reference: string, data: PaystackVerifyData): TopUpCheck {
+export type PaymentCheck = { ok: true; credit: number } | Exclude<TopUpCheck, { ok: true }>;
+
+/**
+ * Does Paystack's record match what this user started, and how much to credit?
+ * Paid amount + fee → the full amount. A client that ignored the fee (older
+ * mobile builds) paid just the amount → credit it minus Paystack's fee.
+ */
+export function checkPaystackPayment(tx: PendingTopUp, reference: string, data: PaystackVerifyData): PaymentCheck {
   if (data.status !== "success") return { ok: false, code: "not_successful", message: "Payment not successful" };
   if (data.reference && data.reference !== reference) {
     return { ok: false, code: "mismatch", message: "Payment does not match this top-up" };
   }
-  if ((data.currency ?? "").toUpperCase() !== tx.currency.toUpperCase() || data.amount !== toKobo(tx.amount)) {
+  if ((data.currency ?? "").toUpperCase() !== tx.currency.toUpperCase()) {
     return { ok: false, code: "mismatch", message: "Payment does not match this top-up" };
   }
-  return { ok: true };
+  const expected = tx.charge ?? tx.amount;
+  if (data.amount === toKobo(expected)) return { ok: true, credit: tx.amount };
+  if (tx.charge !== undefined && tx.charge !== tx.amount && data.amount === toKobo(tx.amount)) {
+    return { ok: true, credit: round2(tx.amount - paystackFee(tx.amount)) };
+  }
+  return { ok: false, code: "mismatch", message: "Payment does not match this top-up" };
 }
