@@ -14,6 +14,7 @@ import {
   updateAdminUserStatusController,
 } from "./admin.controller";
 import { requireAdmin } from "../../middleware/require-admin";
+import { reconcilePendingTopUps } from "../wallet/wallet.settlement";
 
 const router = Router();
 
@@ -53,5 +54,14 @@ router.patch(
   requireAdmin,
   updateAdminCardOrderStatusController
 );
+
+// Credit paid-but-unconfirmed top-ups now (the reconciler also runs on a timer).
+router.post("/api/admin/topups/reconcile", requireAdmin, async (_req, res, next) => {
+  try {
+    res.json({ success: true, summary: await reconcilePendingTopUps({ minAgeMs: 0, recheckMs: 0, limit: 500 }) });
+  } catch (error) {
+    next(error);
+  }
+});
 
 export default router;
