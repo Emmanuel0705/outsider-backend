@@ -11,7 +11,7 @@ import { checkPaystackPayment, type PaystackVerifyData } from "./wallet.verifica
 // Crediting is claim-then-credit, so whichever path gets there first wins and
 // the others see "already completed".
 
-export type SettleSource = "verify" | "webhook" | "reconcile";
+export type SettleSource = "verify" | "webhook" | "reconcile" | "admin";
 
 export type SettleOutcome =
   | { status: "credited"; credit: number; wallet: Awaited<ReturnType<typeof creditWallet>> }
