@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, NextFunction, Request, Response } from "express";
 import {
   adminLoginController,
   adminOverviewController,
@@ -14,7 +14,7 @@ import {
   updateAdminUserStatusController,
 } from "./admin.controller";
 import { requireAdmin } from "../../middleware/require-admin";
-import { reconcilePendingTopUps } from "../wallet/wallet.settlement";
+import { checkTopUpController, listTopUpsController, reconcileTopUpsController } from "../wallet/wallet.admin";
 
 const router = Router();
 
@@ -55,13 +55,11 @@ router.patch(
   updateAdminCardOrderStatusController
 );
 
-// Credit paid-but-unconfirmed top-ups now (the reconciler also runs on a timer).
-router.post("/api/admin/topups/reconcile", requireAdmin, async (_req, res, next) => {
-  try {
-    res.json({ success: true, summary: await reconcilePendingTopUps({ minAgeMs: 0, recheckMs: 0, limit: 500 }) });
-  } catch (error) {
-    next(error);
-  }
-});
+// Top-ups paid but not credited: list, check one with Paystack, or sweep all.
+const safe = (fn: (req: Request, res: Response) => Promise<void>) => (req: Request, res: Response, next: NextFunction) =>
+  fn(req, res).catch(next);
+router.get("/api/admin/topups", requireAdmin, safe(listTopUpsController));
+router.post("/api/admin/topups/reconcile", requireAdmin, safe(reconcileTopUpsController));
+router.post("/api/admin/topups/:reference/check", requireAdmin, safe(checkTopUpController));
 
 export default router;
