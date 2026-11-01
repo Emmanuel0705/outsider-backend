@@ -18,6 +18,8 @@ import ticketRoutes from "./modules/tickets/tickets.routes";
 import cardRoutes from "./modules/card/card.routes";
 import adminRoutes from "./modules/admin/admin.routes";
 import checkInRoutes from "./modules/checkin/checkin.routes";
+import { paystackWebhookController } from "./modules/wallet/wallet.webhook";
+import { startTopUpReconciler } from "./modules/wallet/wallet.settlement";
 
 const app = express();
 
@@ -40,6 +42,11 @@ app.use(
 // toNodeHandler can read the raw request body stream itself.
 app.all("/api/auth/*", (req, res, next) => {
   toNodeHandler(auth)(req, res).catch(next);
+});
+
+// Paystack signs the raw body, so the webhook is mounted before express.json().
+app.post("/api/webhooks/paystack", express.raw({ type: "*/*", limit: "1mb" }), (req, res, next) => {
+  paystackWebhookController(req, res).catch(next);
 });
 
 app.use(express.json());
@@ -68,6 +75,8 @@ app.use(checkInRoutes);
 
 async function start() {
   await connectDb();
+  // Credits paid top-ups the app never confirmed and the webhook missed.
+  startTopUpReconciler();
   const port = Number(process.env.PORT ?? 3011);
   app.listen(port, "0.0.0.0", () => {
     console.log(`Express is running at http://0.0.0.0:${port}`);

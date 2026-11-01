@@ -1,21 +1,16 @@
 import { Request, Response } from "express";
 import mongoose from "mongoose";
 import { nanoid } from "nanoid";
-import axios from "axios";
-import { Wallet } from "../../db/models/Wallet";
 import { Transaction } from "../../db/models/Transaction";
 import { findOrCreateWallet } from "./wallet.repository";
+import { fetchPaystackTransaction, settleTopUp } from "./wallet.settlement";
 import {
   MIN_TOPUP_NGN,
   chargeFor,
   checkOwnership,
-  checkPaystackPayment,
   parseTopUpAmount,
   toKobo,
-  type PaystackVerifyData,
 } from "./wallet.verification";
-
-const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET_KEY ?? "";
 
 // ─── Get user wallet ──────────────────────────────────────────────────────────
 
@@ -101,70 +96,36 @@ export async function verifyTopUpController(req: Request, res: Response) {
     return;
   }
 
-  let paystack: { status: boolean; data: PaystackVerifyData };
+  let lookup: Awaited<ReturnType<typeof fetchPaystackTransaction>>;
   try {
-    const { data } = await axios.get(
-      `https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`,
-      { headers: { Authorization: `Bearer ${PAYSTACK_SECRET}` }, timeout: 15_000 },
-    );
-    paystack = data;
-  } catch (err: unknown) {
-    const msg =
-      axios.isAxiosError(err) && err.response?.data?.message
-        ? err.response.data.message
-        : "Paystack verification failed";
-    res.status(400).json({ error: msg });
+    lookup = await fetchPaystackTransaction(reference);
+  } catch {
+    res.status(400).json({ error: "Paystack verification failed" });
+    return;
+  }
+  if (!lookup.found) {
+    res.status(400).json({ error: lookup.message });
     return;
   }
 
-  const payment = paystack.status
-    ? checkPaystackPayment(pending!, reference, paystack.data)
-    : ({ ok: false, code: "not_successful", message: "Payment not successful" } as const);
-  if (!payment.ok) {
-    if (payment.code === "mismatch") {
-      // Never credit a payment that doesn't match what was initiated.
-      await Transaction.updateOne(
-        { _id: tx!._id, status: "pending" },
-        { $set: { status: "failed", "metadata.failure": "amount_or_currency_mismatch", "metadata.paystackAmountKobo": paystack.data.amount } },
-      );
-    }
-    res.status(400).json({ error: payment.message });
-    return;
-  }
-
-  await findOrCreateWallet(userId);
-
-  // Atomically claim the pending record; only one concurrent verify can win.
-  const claimed = await Transaction.findOneAndUpdate(
-    { _id: tx!._id, userId, status: "pending" },
-    {
-      $set: {
-        status: "completed",
-        amount: payment.credit,
-        "metadata.paystackStatus": paystack.data.status,
-        "metadata.paidKobo": paystack.data.amount,
-      },
-    },
-    { new: true },
-  ).lean();
-
-  if (!claimed) {
-    // Another request completed it first: don't credit again.
-    res.json({ success: true, wallet: walletResponse(await findOrCreateWallet(userId)) });
-    return;
-  }
-
-  try {
-    const updatedWallet = await Wallet.findOneAndUpdate(
-      { userId },
-      { $inc: { balance: claimed.amount } },
-      { new: true },
-    ).lean();
-    res.json({ success: true, wallet: walletResponse(updatedWallet) });
-  } catch (err) {
-    // Release the claim so the user can retry verification.
-    await Transaction.updateOne({ _id: claimed._id, status: "completed" }, { $set: { status: "pending" } });
-    throw err;
+  // Same settlement the webhook and reconciler use: credits at most once.
+  const outcome = await settleTopUp(reference, lookup.data, { userId, source: "verify" });
+  switch (outcome.status) {
+    case "credited":
+      res.json({ success: true, wallet: walletResponse(outcome.wallet) });
+      return;
+    case "already_completed":
+      res.json({ success: true, wallet: walletResponse(await findOrCreateWallet(userId)) });
+      return;
+    case "rejected":
+      res.status(400).json({ error: outcome.message });
+      return;
+    case "not_found":
+      res.status(404).json({ error: "Unknown top-up reference" });
+      return;
+    case "not_pending":
+      res.status(400).json({ error: "This top-up can no longer be verified" });
+      return;
   }
 }
 

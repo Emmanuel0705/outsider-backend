@@ -32,3 +32,13 @@ WEB_ORIGINS=http://localhost:3010,https://app.outsiderbyremy.com
   opens the owner's public profile (`GET /api/public/cards/:cardId` → `publicId`); the door scanner
   and card connect also accept the older `…/card?id=<cardId>` form and bare ids. A person's QR and
   card are the same entry credential, so either one checks them in once per event.
+
+## Paystack webhook and top-up reconciliation
+- Webhook URL (Paystack dashboard → Settings → API Keys & Webhooks, set it for Live and Test):
+  `https://<backend>/api/webhooks/paystack`. Requests are checked against `x-paystack-signature`
+  (HMAC-SHA512 of the raw body with `PAYSTACK_SECRET_KEY`). `charge.success` for `TXN-TOPUP-…`
+  credits the wallet once, even if the user closed the app before it confirmed.
+- A reconciler asks Paystack about top-ups still pending (2 min – 30 days old) every
+  `TOPUP_RECONCILE_INTERVAL_MS` (default 5 min, `0` disables) and credits paid ones; unpaid ones
+  older than 24h are marked failed. Run it now with `POST /api/admin/topups/reconcile` (admin token).
+- Verify, webhook and reconciler share one claim-then-credit step, so a payment is credited at most once.
