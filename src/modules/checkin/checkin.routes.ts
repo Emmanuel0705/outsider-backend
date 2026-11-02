@@ -6,6 +6,7 @@ import {
   getCheckInStatsController,
   getPublicCardController,
   getPublicProfileController,
+  setPhysicalTicketsController,
 } from "./checkin.controller";
 
 const router = Router();
@@ -18,5 +19,6 @@ router.get("/api/public/cards/:cardId", getPublicCardController);
 router.post("/api/merchant/events/:eventId/check-ins", requireAuth, checkInController);
 router.get("/api/merchant/events/:eventId/check-ins", requireAuth, getCheckInStatsController);
 router.get("/api/merchant/check-in-candidates/:publicId", requireAuth, getCheckInCandidatesController);
+router.patch("/api/merchant/events/:eventId/physical-tickets", requireAuth, setPhysicalTicketsController);
 
 export default router;
