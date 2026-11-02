@@ -4,6 +4,7 @@ import {
   checkInWindow,
   clampPaging,
   displayName,
+  matchPaperTier,
   parseEntryPayload,
   profileUrl,
   searchPattern,
@@ -30,6 +31,19 @@ describe("parseEntryPayload", () => {
   it("reads physical NFC card payloads", () => {
     expect(parseEntryPayload("https://outsiders.app/c?id=CARD12345678")).toEqual({ kind: "physical", id: "card12345678" });
     expect(parseEntryPayload("CARD12345678")).toEqual({ kind: "physical", id: "card12345678" });
+  });
+  it("reads the shared paper ticket QR", () => {
+    const id = "6ae5bb93d7021eaf3d51f212";
+    expect(parseEntryPayload(`https://app.outsiderbyremy.com/events/${id}?ticket=ravers`)).toEqual({ kind: "paper", id: "ravers", eventId: id });
+    expect(parseEntryPayload(`https://app.outsiderbyremy.com/events/${id}`)).toBeNull();
+    expect(parseEntryPayload(`https://app.outsiderbyremy.com/events/${id}/checkout?ticket=ravers`)).toBeNull();
+    expect(parseEntryPayload("https://app.outsiderbyremy.com/events/nope?ticket=ravers")).toBeNull();
+  });
+  it("matches a paper ticket to its ticket type by name", () => {
+    const tiers = [{ name: "Regular" }, { name: " RAVERS " }];
+    expect(matchPaperTier(tiers, "ravers")).toBe(tiers[1]!);
+    expect(matchPaperTier(tiers, "regular")).toBe(tiers[0]!);
+    expect(matchPaperTier(tiers, "vip")).toBeNull();
   });
   it("rejects junk", () => {
     for (const bad of ["", "hi", "https://evil.example/u/not-a-card", "javascript:alert(1)", 42, null, "x".repeat(600)]) {

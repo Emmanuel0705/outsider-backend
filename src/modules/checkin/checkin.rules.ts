@@ -8,7 +8,8 @@ const PHYSICAL_ID = /^[A-Za-z0-9_-]{8,128}$/;
 
 export type EntryCode =
   | { kind: "virtual"; id: string }
-  | { kind: "physical"; id: string };
+  | { kind: "physical"; id: string }
+  | { kind: "paper"; id: string; eventId: string };
 
 /** Public profile link encoded in every user's QR code. */
 export function profileUrl(virtualCardId: string, appUrl = DEFAULT_APP_URL) {
@@ -18,6 +19,26 @@ export function profileUrl(virtualCardId: string, appUrl = DEFAULT_APP_URL) {
 /** Link programmed into physical NFC cards (and any QR printed on them). */
 export function cardUrl(cardId: string, appUrl = DEFAULT_APP_URL) {
   return `${appUrl.replace(/\/+$/, "")}/c/${cardId}`;
+}
+
+/**
+ * Shared QR printed on paper tickets: the event link plus the ticket type, e.g.
+ * https://app…/events/<eventId>?ticket=ravers. `id` is the lower-cased type.
+ */
+export function parsePaperTicket(input: string): { id: string; eventId: string } | null {
+  try {
+    const url = new URL(input.trim());
+    const eventId = url.pathname.match(/^\/events\/([a-f0-9]{24})\/?$/i)?.[1];
+    const ticket = url.searchParams.get("ticket")?.trim().toLowerCase();
+    return eventId && ticket && ticket.length <= 60 ? { id: ticket, eventId: eventId.toLowerCase() } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Ticket type a paper ticket refers to, matched by name ("ravers" → "RAVERS"). */
+export function matchPaperTier<T extends { name: string }>(tiers: T[], ticket: string): T | null {
+  return tiers.find((t) => t.name.trim().toLowerCase() === ticket) ?? null;
 }
 
 /** Accepts a virtual card id in any form we have ever printed into a QR. */
@@ -65,6 +86,8 @@ export function parsePhysicalCardId(input: string): string | null {
 /** What a scanner read → which credential it is. Virtual wins when both match. */
 export function parseEntryPayload(input: unknown): EntryCode | null {
   if (typeof input !== "string" || input.length > 512) return null;
+  const paper = parsePaperTicket(input);
+  if (paper) return { kind: "paper", ...paper };
   const virtual = parseVirtualCardId(input);
   if (virtual) return { kind: "virtual", id: virtual };
   const physical = parsePhysicalCardId(input);

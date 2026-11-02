@@ -27,6 +27,8 @@ export interface IEvent {
   isFavoriteCount?: number;
   isPopular?: boolean;
   isRecommended?: boolean;
+  /** Door accepts the shared paper-ticket QR. Off until the merchant turns it on. */
+  physicalTicketsEnabled?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -74,6 +76,7 @@ const eventSchema = new Schema<IEvent>(
     isFavoriteCount: { type: Number, default: 0 },
     isPopular: { type: Boolean, default: false },
     isRecommended: { type: Boolean, default: false },
+    physicalTicketsEnabled: { type: Boolean, default: false },
   },
   { timestamps: true }
 );

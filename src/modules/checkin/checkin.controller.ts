@@ -7,11 +7,13 @@ import { Event } from "../../db/models/Event";
 import { Merchant } from "../../db/models/Merchant";
 import { Order } from "../../db/models/Order";
 import { VirtualCard } from "../../db/models/VirtualCard";
+import { PhysicalTicketTally } from "../../db/models/PhysicalTicketTally";
 import { findUsers, type UserDoc } from "../../lib/users";
 import { getOrIssueVirtualCard } from "../card/card.controller";
 import {
   checkInWindow,
   displayName,
+  matchPaperTier,
   parseEntryPayload,
   parseVirtualCardId,
   summariseAdmission,
@@ -138,6 +140,10 @@ export async function checkInController(req: Request, res: Response) {
     res.status(400).json({ status: "invalid_code", error: "That isn't an Outsiders code." });
     return;
   }
+  if (code.kind === "paper") {
+    await admitPaperTicket(event, code, ctx.userId, res);
+    return;
+  }
   const holderId = await resolveHolder(code);
   if (!holderId) {
     res.status(404).json({ status: "unknown_code", error: "We don't recognise this code." });
@@ -248,6 +254,77 @@ export async function resolveEntryController(req: Request, res: Response) {
   });
 }
 
+// ─── Paper tickets (one shared QR per ticket type) ───────────────────────────
+
+/**
+ * Each scan admits one guest and atomically takes one ticket from the type, so
+ * the door stops at capacity however many copies of the QR exist. The merchant
+ * must have turned paper tickets on: anyone can build this QR from a public link.
+ */
+async function admitPaperTicket(
+  event: NonNullable<Awaited<ReturnType<typeof loadOwnedEvent>>>,
+  code: { id: string; eventId: string },
+  scannedBy: mongoose.Types.ObjectId,
+  res: Response
+) {
+  if (code.eventId !== String(event._id)) {
+    res.status(409).json({ status: "wrong_event", error: "This ticket is for a different event." });
+    return;
+  }
+  if (!event.physicalTicketsEnabled) {
+    res.status(409).json({ status: "physical_off", error: "Physical tickets are switched off for this event." });
+    return;
+  }
+  const tier = matchPaperTier(event.ticketTiers, code.id);
+  const tierId = (tier as { _id?: mongoose.Types.ObjectId } | null)?._id;
+  if (!tier || !tierId) {
+    res.status(409).json({ status: "wrong_event", error: "This event has no such ticket type." });
+    return;
+  }
+  const taken = await Event.updateOne(
+    { _id: event._id, ticketTiers: { $elemMatch: { _id: tierId, soldQuantity: { $lt: tier.totalQuantity } } } },
+    { $inc: { "ticketTiers.$.soldQuantity": 1 } }
+  );
+  if (taken.modifiedCount === 0) {
+    res.status(409).json({ status: "tier_full", error: `${tier.name} is full.`, tierName: tier.name });
+    return;
+  }
+  const now = new Date();
+  const bump = () =>
+    PhysicalTicketTally.findOneAndUpdate(
+      { eventId: event._id, tierId },
+      { $inc: { admitted: 1 }, $set: { lastScanAt: now, lastScannedBy: scannedBy } },
+      { upsert: true, new: true }
+    ).lean();
+  // Two gates creating the first tally at once: the loser's retry finds the record.
+  const tally = await bump().catch((error) => {
+    if (isDuplicateKey(error)) return bump();
+    throw error;
+  });
+  res.status(201).json({
+    status: "checked_in",
+    admitNow: 1,
+    totalAdmitted: 1,
+    tiers: [{ name: tier.name, quantity: 1 }],
+    checkedInAt: now,
+    paperTicket: { tierName: tier.name, number: tally?.admitted ?? 1 },
+  });
+}
+
+/** PATCH /api/merchant/events/:eventId/physical-tickets { enabled } */
+export async function setPhysicalTicketsController(req: Request, res: Response) {
+  const ctx = await requireMerchant(req, res);
+  if (!ctx) return;
+  const event = await loadOwnedEvent(req.params.eventId, ctx.merchantId, res);
+  if (!event) return;
+  if (typeof req.body?.enabled !== "boolean") {
+    res.status(400).json({ error: "enabled must be true or false" });
+    return;
+  }
+  await Event.updateOne({ _id: event._id, merchantId: ctx.merchantId }, { $set: { physicalTicketsEnabled: req.body.enabled } });
+  res.json({ enabled: req.body.enabled });
+}
+
 // ─── Door stats ──────────────────────────────────────────────────────────────
 
 export async function getCheckInStatsController(req: Request, res: Response) {
@@ -263,6 +340,7 @@ export async function getCheckInStatsController(req: Request, res: Response) {
       { $group: { _id: null, attendees: { $sum: 1 }, admitted: { $sum: "$admitted" } } },
     ]),
   ]);
+  const tallies = await PhysicalTicketTally.find({ eventId: event._id }).select("tierId admitted lastScanAt").lean();
   const ids = recent.map((r) => r.userId);
   const [users, publicIds] = await Promise.all([findUsers(ids), publicIdsFor(ids)]);
 
@@ -270,7 +348,15 @@ export async function getCheckInStatsController(req: Request, res: Response) {
     event: { _id: String(event._id), title: event.title, startDate: event.startDate, endDate: event.endDate ?? null, status: event.status },
     ticketsSold: event.ticketTiers.reduce((sum, t) => sum + (t.soldQuantity ?? 0), 0),
     attendees: totals[0]?.attendees ?? 0,
-    admitted: totals[0]?.admitted ?? 0,
+    admitted: (totals[0]?.admitted ?? 0) + tallies.reduce((sum, t) => sum + t.admitted, 0),
+    physicalTickets: {
+      enabled: !!event.physicalTicketsEnabled,
+      tiers: tallies.map((t) => ({
+        tierName: event.ticketTiers.find((x) => String((x as { _id?: unknown })._id) === String(t.tierId))?.name ?? "Ticket",
+        admitted: t.admitted,
+        lastScanAt: t.lastScanAt,
+      })),
+    },
     window: checkInWindow(event),
     recent: recent.map((r) => ({
       attendee: attendeeView(users.get(String(r.userId)), publicIds.get(String(r.userId)) ?? null),
